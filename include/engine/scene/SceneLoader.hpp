@@ -1,7 +1,7 @@
-#ifndef ENGINE_ECS_HPP
-#define ENGINE_ENGINE_HPP
+#ifndef ENGINE_SCENE_SCENELOADER_HPP
+#define ENGINE_SCENE_SCENELOADER_HPP
 
-namespace ecs
+namespace engine
 {
 
     class Scene
@@ -13,8 +13,8 @@ namespace ecs
         void onExit();
 
         void loadAssets();
-    }
+    };
 
-}
+} // namespace engine
 
 #endif

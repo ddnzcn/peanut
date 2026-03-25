@@ -2,6 +2,7 @@
 
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 namespace atlas2d
 {
@@ -194,6 +195,8 @@ AtlasImageView AtlasPack::GetPageImage(uint32_t pageIndex) const
   return view;
 }
 
+// Returns normalized [0,1] UVs. Note: gsKit expects pixel-space texcoords,
+// so use BuildAtlasQuad (in AtlasPackUtils) for rendering, not this.
 SpriteUVRect AtlasPack::ComputeUVs(const AtlasSprite &sprite) const
 {
   SpriteUVRect uv = {};
@@ -231,6 +234,12 @@ bool AtlasPack::ReadWholeFile(const std::string &path,
   {
     *outError = "Failed to open file: " + path;
     return false;
+  }
+
+  struct stat st;
+  if (fstat(fd, &st) == 0 && st.st_size > 0)
+  {
+    outBytes->reserve(static_cast<size_t>(st.st_size));
   }
 
   uint8_t chunk[4096];
@@ -308,6 +317,18 @@ bool AtlasPack::ResolveTables()
   const uint32_t spritesSize =
       static_cast<uint32_t>(m_header->spriteCount) * sizeof(AtlasSprite);
 
+  if (m_header->pageTableOffset % 4 != 0)
+  {
+    m_lastError = "Page table offset not 4-byte aligned";
+    return false;
+  }
+
+  if (m_header->spriteTableOffset % 4 != 0)
+  {
+    m_lastError = "Sprite table offset not 4-byte aligned";
+    return false;
+  }
+
   if (AddOverflowsRange(m_header->pageTableOffset, pagesSize, metaSize))
   {
     m_lastError = "Page table out of range";
@@ -327,6 +348,12 @@ bool AtlasPack::ResolveTables()
 
   if (m_header->hashTableOffset != 0)
   {
+    if (m_header->hashTableOffset % 4 != 0)
+    {
+      m_lastError = "Hash table offset not 4-byte aligned";
+      return false;
+    }
+
     if (m_header->hashTableOffset >= metaSize)
     {
       m_lastError = "Hash table offset out of range";
@@ -432,10 +459,19 @@ bool AtlasPack::ValidateHashTable()
       return false;
     }
 
-    if (i > 0 && m_hashes[i - 1].nameHash > m_hashes[i].nameHash)
+    if (i > 0)
     {
-      m_lastError = "Hash table not sorted";
-      return false;
+      if (m_hashes[i - 1].nameHash > m_hashes[i].nameHash)
+      {
+        m_lastError = "Hash table not sorted";
+        return false;
+      }
+
+      if (m_hashes[i - 1].nameHash == m_hashes[i].nameHash)
+      {
+        m_lastError = "Duplicate name hash in hash table";
+        return false;
+      }
     }
   }
 

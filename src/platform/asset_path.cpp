@@ -18,7 +18,9 @@ namespace
 
 bool HasDevicePrefix(const std::string &path)
 {
-  return path.find(':') != std::string::npos;
+  const size_t pos = path.find(':');
+  // PS2 device names are short (host, mass, cdrom0, mc0, etc.)
+  return pos != std::string::npos && pos > 0 && pos <= 8;
 }
 
 std::string TrimLeadingSeparators(const std::string &path)
