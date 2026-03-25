@@ -7,7 +7,7 @@ EE_BIN = ps2jam.elf
 
 EE_INCS += -I$(CURDIR)/include
 EE_INCS += -I$(GSKIT)/include
-EE_CXXFLAGS += -std=c++17 -O2 -G0 -Wall -Wextra
+EE_CXXFLAGS += -std=c++17 -O2 -G0 -Wall -Wextra -Werror=return-type -Werror=uninitialized
 EE_CXXFLAGS += -DPS2_ASSET_DEVICE=\"$(ASSET_DEVICE)\"
 EE_CXXFLAGS += -DPS2_ASSET_ROOT=\"$(ASSET_ROOT)\"
 EE_LDFLAGS += -L$(GSKIT)/lib
@@ -15,6 +15,7 @@ EE_LDFLAGS += -L$(GSKIT)/lib
 EE_OBJS = \
 	src/main.o \
 	src/atlas2d/AtlasPack.o \
+	src/atlas2d/AtlasPackUtils.o \
 	src/platform/asset_path.o \
 	src/engine/engine.o
 
