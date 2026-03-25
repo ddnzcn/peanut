@@ -1,5 +1,19 @@
+# PS2 build outputs
 *.d
 *.elf
 *.o
+*.a
+*.map
+*.lst
+*.s
+*.irx
+*.iso
+*.img
 
-.DS_store
+# Debug and symbol artifacts
+*.sym
+*.log
+
+# macOS / editor noise
+.DS_Store
+.vscode/
