@@ -16,10 +16,12 @@ EE_OBJS = \
 	src/main.o \
 	src/atlas2d/AtlasPack.o \
 	src/atlas2d/AtlasPackUtils.o \
+	src/level2d/TilemapRuntime.o \
+	src/level2d/TilemapRenderer.o \
 	src/platform/asset_path.o \
 	src/engine/engine.o
 
-EE_LIBS += -lgskit -ldmakit -lc -lstdc++
+EE_LIBS += -lgskit -ldmakit -lpad -lc -lstdc++
 
 ifeq ($(BUILD_MODE),erl)
 $(error BUILD_MODE=erl is no longer supported by this project because the installed ps2sdk does not provide erl-loader.elf)
