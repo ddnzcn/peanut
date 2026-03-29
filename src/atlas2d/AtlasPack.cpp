@@ -123,11 +123,23 @@ const AtlasSprite *AtlasPack::FindSpriteById(uint32_t id) const
     return nullptr;
   }
 
-  for (uint32_t i = 0; i < m_header->spriteCount; ++i)
+  uint32_t left = 0;
+  uint32_t right = static_cast<uint32_t>(m_header->spriteCount);
+
+  while (left < right)
   {
-    if (m_sprites[i].id == id)
+    const uint32_t mid = left + (right - left) / 2;
+    if (m_sprites[mid].id == id)
     {
-      return &m_sprites[i];
+      return &m_sprites[mid];
+    }
+    if (id < m_sprites[mid].id)
+    {
+      right = mid;
+    }
+    else
+    {
+      left = mid + 1;
     }
   }
 
@@ -466,6 +478,12 @@ bool AtlasPack::ValidatePages()
     if (x2 > page.width || y2 > page.height)
     {
       m_lastError = "Sprite rect out of page bounds";
+      return false;
+    }
+
+    if (i > 0 && m_sprites[i].id <= m_sprites[i - 1].id)
+    {
+      m_lastError = "Sprite table not sorted by id (required for binary search)";
       return false;
     }
   }

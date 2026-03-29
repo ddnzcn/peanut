@@ -96,6 +96,8 @@ namespace atlas2d
 
 #pragma pack(pop)
 
+  static constexpr uint16_t SpriteFlag_Rotated = 0x0001;
+
 #ifndef __INTELLISENSE__
   static_assert(sizeof(AtlasHeader) == 44, "AtlasHeader size mismatch");
   static_assert(sizeof(AtlasPage) == 30, "AtlasPage size mismatch");
