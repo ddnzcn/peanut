@@ -37,6 +37,7 @@ namespace engine
   static bool atlas_ready = false;
   static bool tilemap_ready = false;
   static bool pad_ready = false;
+  static bool sif_loaded = false; // tracks SifLoadFileInit success to guard SifLoadFileExit
   static int pad_port = 0;
   static int pad_slot = 0;
   static unsigned char pad_buffer[256] __attribute__((aligned(64)));
@@ -53,6 +54,7 @@ namespace engine
       std::printf("InitPad: SifLoadFileInit failed\n");
       return false;
     }
+    sif_loaded = true;
 
     int ret = SifLoadModule("rom0:SIO2MAN", 0, nullptr);
     if (ret < 0)
@@ -105,7 +107,14 @@ namespace engine
       padEnd();
     }
 
-    SifLoadFileExit();
+    // Only call SifLoadFileExit if SifLoadFileInit succeeded,
+    // otherwise IOP state corruption risk
+    if (sif_loaded)
+    {
+      SifLoadFileExit();
+      sif_loaded = false;
+    }
+
     pad_ready = false;
   }
 
@@ -372,15 +381,20 @@ namespace engine
     const u64 chunkColor = GS_SETREG_RGBAQ(255, 200, 64, 96, 0);
     const u64 chunkFillColor = GS_SETREG_RGBAQ(96, 180, 255, 56, 0);
 
+    // Computed once here — was duplicated in both DEBUG_CHUNK_GRID blocks
+    const uint32_t chunkCols =
+        (static_cast<uint32_t>(header.mapWidthTiles) + static_cast<uint32_t>(header.chunkWidthTiles) - 1u) /
+        static_cast<uint32_t>(header.chunkWidthTiles);
+    const uint32_t chunkRows =
+        (static_cast<uint32_t>(header.mapHeightTiles) + static_cast<uint32_t>(header.chunkHeightTiles) - 1u) /
+        static_cast<uint32_t>(header.chunkHeightTiles);
+
+    // Cached for viewport culling — avoids repeated casts and skips off-screen lines
+    const float screenW = static_cast<float>(gs_global->Width);
+    const float screenH = static_cast<float>(gs_global->Height);
+
     if (DEBUG_CHUNK_GRID)
     {
-      const uint32_t chunkCols =
-          (static_cast<uint32_t>(header.mapWidthTiles) + static_cast<uint32_t>(header.chunkWidthTiles) - 1u) /
-          static_cast<uint32_t>(header.chunkWidthTiles);
-      const uint32_t chunkRows =
-          (static_cast<uint32_t>(header.mapHeightTiles) + static_cast<uint32_t>(header.chunkHeightTiles) - 1u) /
-          static_cast<uint32_t>(header.chunkHeightTiles);
-
       for (uint32_t cy = 0; cy < chunkRows; ++cy)
       {
         for (uint32_t cx = 0; cx < chunkCols; ++cx)
@@ -394,6 +408,12 @@ namespace engine
           const float top = params.originY + static_cast<float>(cy) * chunkH - scrollY;
           const float right = left + chunkW;
           const float bottom = top + chunkH;
+
+          // Skip chunks entirely off-screen to avoid wasting GIF packets
+          if (right < 0.0f || left > screenW || bottom < 0.0f || top > screenH)
+          {
+            continue;
+          }
 
           for (float x = left - chunkH; x < right; x += tileW)
           {
@@ -412,35 +432,45 @@ namespace engine
       for (uint32_t x = 0; x <= header.mapWidthTiles; ++x)
       {
         const float sx = params.originX + static_cast<float>(x) * tileW - scrollX;
-        gsKit_prim_line(gs_global, sx, 0.0f, sx, static_cast<float>(gs_global->Height), 1, tileColor);
+        // Viewport cull — was drawing entire map, wasting GIF bandwidth on large maps
+        if (sx < 0.0f || sx > screenW)
+        {
+          continue;
+        }
+        gsKit_prim_line(gs_global, sx, 0.0f, sx, screenH, 1, tileColor);
       }
 
       for (uint32_t y = 0; y <= header.mapHeightTiles; ++y)
       {
         const float sy = params.originY + static_cast<float>(y) * tileH - scrollY;
-        gsKit_prim_line(gs_global, 0.0f, sy, static_cast<float>(gs_global->Width), sy, 1, tileColor);
+        if (sy < 0.0f || sy > screenH)
+        {
+          continue;
+        }
+        gsKit_prim_line(gs_global, 0.0f, sy, screenW, sy, 1, tileColor);
       }
     }
 
     if (DEBUG_CHUNK_GRID)
     {
-      const uint32_t chunkCols =
-          (static_cast<uint32_t>(header.mapWidthTiles) + static_cast<uint32_t>(header.chunkWidthTiles) - 1u) /
-          static_cast<uint32_t>(header.chunkWidthTiles);
-      const uint32_t chunkRows =
-          (static_cast<uint32_t>(header.mapHeightTiles) + static_cast<uint32_t>(header.chunkHeightTiles) - 1u) /
-          static_cast<uint32_t>(header.chunkHeightTiles);
-
       for (uint32_t cx = 0; cx <= chunkCols; ++cx)
       {
         const float sx = params.originX + static_cast<float>(cx) * chunkW - scrollX;
-        gsKit_prim_line(gs_global, sx, 0.0f, sx, static_cast<float>(gs_global->Height), 1, chunkColor);
+        if (sx < 0.0f || sx > screenW)
+        {
+          continue;
+        }
+        gsKit_prim_line(gs_global, sx, 0.0f, sx, screenH, 1, chunkColor);
       }
 
       for (uint32_t cy = 0; cy <= chunkRows; ++cy)
       {
         const float sy = params.originY + static_cast<float>(cy) * chunkH - scrollY;
-        gsKit_prim_line(gs_global, 0.0f, sy, static_cast<float>(gs_global->Width), sy, 1, chunkColor);
+        if (sy < 0.0f || sy > screenH)
+        {
+          continue;
+        }
+        gsKit_prim_line(gs_global, 0.0f, sy, screenW, sy, 1, chunkColor);
       }
     }
   }

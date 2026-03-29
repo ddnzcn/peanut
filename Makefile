@@ -19,6 +19,7 @@ EE_OBJS = \
 	src/level2d/TilemapRuntime.o \
 	src/level2d/TilemapRenderer.o \
 	src/platform/asset_path.o \
+	src/platform/file_io.o \
 	src/engine/engine.o
 
 EE_LIBS += -lgskit -ldmakit -lpad -lc -lstdc++
