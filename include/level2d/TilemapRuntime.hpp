@@ -303,10 +303,6 @@ namespace level2d
 
     std::string m_lastError;
 
-  private:
-    static bool ReadWholeFile(const std::string &path,
-                              std::vector<uint8_t> *outBytes,
-                              std::string *outError);
     bool ValidateHeader();
     bool ResolveSections();
     bool ValidateRanges();

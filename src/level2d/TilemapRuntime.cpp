@@ -1,9 +1,7 @@
 #include "level2d/TilemapRuntime.hpp"
+#include "platform/file_io.hpp"
 
 #include <cstring>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 namespace level2d
 {
@@ -44,7 +42,7 @@ bool Tilemap::Load(const std::string &path)
 {
   Clear();
 
-  if (!ReadWholeFile(path, &m_bytesStorage, &m_lastError))
+  if (!platform::ReadWholeFile(path, &m_bytesStorage, &m_lastError))
   {
     return false;
   }
@@ -104,49 +102,6 @@ void Tilemap::Clear()
   m_usesTilesetRemapTable = false;
 
   m_lastError.clear();
-}
-
-bool Tilemap::ReadWholeFile(const std::string &path,
-                            std::vector<uint8_t> *outBytes,
-                            std::string *outError)
-{
-  outBytes->clear();
-
-  const int fd = open(path.c_str(), O_RDONLY);
-  if (fd < 0)
-  {
-    *outError = "Failed to open file: " + path;
-    return false;
-  }
-
-  struct stat st;
-  if (fstat(fd, &st) == 0 && st.st_size > 0)
-  {
-    outBytes->reserve(static_cast<size_t>(st.st_size));
-  }
-
-  uint8_t chunk[4096];
-  for (;;)
-  {
-    const int bytesRead = read(fd, chunk, sizeof(chunk));
-    if (bytesRead < 0)
-    {
-      close(fd);
-      outBytes->clear();
-      *outError = "Failed to read file: " + path;
-      return false;
-    }
-
-    if (bytesRead == 0)
-    {
-      break;
-    }
-
-    outBytes->insert(outBytes->end(), chunk, chunk + bytesRead);
-  }
-
-  close(fd);
-  return true;
 }
 
 uint16_t Tilemap::GetTilesetCount() const
@@ -244,6 +199,11 @@ bool Tilemap::GetAtlasSpriteIdForTile(const TilesetDef &tileset,
   const size_t remapOffset =
       static_cast<size_t>(tileset.atlasSpriteRemapOffset) +
       static_cast<size_t>(tileOffset) * sizeof(uint32_t);
+  // Remap entry is uint32_t — must be 4-byte aligned on MIPS32
+  if (remapOffset % 4 != 0)
+  {
+    return false;
+  }
   if (AddOverflowsRange(remapOffset, sizeof(uint32_t), m_size))
   {
     return false;
@@ -285,6 +245,24 @@ bool Tilemap::GetChunkView(uint32_t chunkIndex, TileChunkView *outView) const
   const ChunkDef &chunk = m_chunks[chunkIndex];
   std::memcpy(&outView->chunk, &chunk, sizeof(ChunkDef));
   outView->hasChunk = true;
+
+  // Re-validate at access time — tileDataOffset was checked in ValidateRanges at load,
+  // but GetChunkView can be called with runtime-computed indices
+  if (outView->chunk.tileDataOffset % 4 != 0)
+  {
+    outView->hasChunk = false;
+    return false;
+  }
+
+  const size_t tileBytes =
+      static_cast<size_t>(outView->chunk.tileCount) * sizeof(TileEntry);
+  const size_t chunkDataSize = m_size - static_cast<size_t>(m_header->chunkDataOffset);
+  if (AddOverflowsRange(outView->chunk.tileDataOffset, tileBytes, chunkDataSize))
+  {
+    outView->hasChunk = false;
+    return false;
+  }
+
   outView->tiles =
       reinterpret_cast<const TileEntry *>(m_chunkData + outView->chunk.tileDataOffset);
   return true;
@@ -499,6 +477,51 @@ bool Tilemap::ResolveSections()
       static_cast<size_t>(m_header->markerCount) * sizeof(Marker);
   const size_t stringsSize =
       static_cast<size_t>(m_header->stringCount) * sizeof(StringEntry);
+
+  // MIPS32 lw instruction requires 4-byte alignment on word access.
+  // Packed structs contain uint32_t fields — if the table base address
+  // isn't 4-byte aligned, the EE throws an Address Error exception (hard crash).
+  if (m_header->tilesetTableOffset % 4 != 0)
+  {
+    m_lastError = "Tileset table offset not 4-byte aligned";
+    return false;
+  }
+
+  if (m_header->layerTableOffset % 4 != 0)
+  {
+    m_lastError = "Layer table offset not 4-byte aligned";
+    return false;
+  }
+
+  if (m_header->chunkTableOffset % 4 != 0)
+  {
+    m_lastError = "Chunk table offset not 4-byte aligned";
+    return false;
+  }
+
+  if (m_header->chunkDataOffset % 4 != 0)
+  {
+    m_lastError = "Chunk data offset not 4-byte aligned";
+    return false;
+  }
+
+  if (m_header->collisionTableOffset % 4 != 0)
+  {
+    m_lastError = "Collision table offset not 4-byte aligned";
+    return false;
+  }
+
+  if (m_header->markerTableOffset % 4 != 0)
+  {
+    m_lastError = "Marker table offset not 4-byte aligned";
+    return false;
+  }
+
+  if (m_header->stringTableOffset % 4 != 0)
+  {
+    m_lastError = "String table offset not 4-byte aligned";
+    return false;
+  }
 
   if (AddOverflowsRange(m_header->tilesetTableOffset, tilesetsSize, m_size))
   {

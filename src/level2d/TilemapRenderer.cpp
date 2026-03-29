@@ -1,7 +1,30 @@
 #include "level2d/TilemapRenderer.hpp"
 
 #include "atlas2d/AtlasPackUtils.hpp"
-#include <cstring>
+
+namespace
+{
+
+// Matches TilemapRuntime's FloorDiv — needed here so parallax scroll calculation
+// is consistent with chunk visibility culling (was using truncating integer division before)
+int FloorDiv(int value, int divisor)
+{
+  if (divisor <= 0)
+  {
+    return 0;
+  }
+
+  int quotient = value / divisor;
+  const int remainder = value % divisor;
+  if (remainder != 0 && value < 0)
+  {
+    --quotient;
+  }
+
+  return quotient;
+}
+
+} // namespace
 
 namespace level2d
 {
@@ -48,7 +71,8 @@ bool ResolveTileSprite(const Tilemap &tilemap,
       return false;
     }
 
-    const atlas2d::AtlasSprite *sprite = atlasPack.FindSpriteById(spriteId);
+    // O(1) flat-table lookup — was O(n) linear scan per tile per frame
+    const atlas2d::AtlasSprite *sprite = atlasPack.FindSpriteByIdFast(spriteId);
     if (!sprite)
     {
       return false;
@@ -77,10 +101,10 @@ void BuildTileQuad(const atlas2d::AtlasSprite &sprite,
 
   const float u0 = static_cast<float>(sprite.x);
   const float v0 = static_cast<float>(sprite.y);
-    const float u1 = static_cast<float>(sprite.x + sprite.w);
-    const float v1 = static_cast<float>(sprite.y + sprite.h);
+  const float u1 = static_cast<float>(sprite.x + sprite.w);
+  const float v1 = static_cast<float>(sprite.y + sprite.h);
 
-    (void)tileset;
+  (void)tileset; // reserved for per-tileset rendering params
 
   out[0] = {x0, y0, u0, v0};
   out[1] = {x0 + w, y0, u1, v0};
@@ -164,17 +188,16 @@ bool DrawChunk(GSGLOBAL *gsGlobal,
     return false;
   }
 
-  LayerDef layerCopy = {};
-  std::memcpy(&layerCopy, &layer, sizeof(LayerDef));
-
   const TilemapHeader &header = *tilemap.GetHeader();
-  const int parallaxX = static_cast<int>(layerCopy.parallaxX_8_8);
-  const int parallaxY = static_cast<int>(layerCopy.parallaxY_8_8);
+  const int parallaxX = static_cast<int>(layer.parallaxX_8_8);
+  const int parallaxY = static_cast<int>(layer.parallaxY_8_8);
 
+  // FloorDiv instead of integer division — truncation caused ±1px jitter
+  // at parallax values != 256, making chunks pop in/out at boundaries
   const float scrollX =
-      static_cast<float>((params.cameraX * parallaxX) / 256) - static_cast<float>(layerCopy.offsetX);
+      static_cast<float>(FloorDiv(params.cameraX * parallaxX, 256)) - static_cast<float>(layer.offsetX);
   const float scrollY =
-      static_cast<float>((params.cameraY * parallaxY) / 256) - static_cast<float>(layerCopy.offsetY);
+      static_cast<float>(FloorDiv(params.cameraY * parallaxY, 256)) - static_cast<float>(layer.offsetY);
 
   const float chunkBaseX =
       params.originX +
@@ -189,8 +212,8 @@ bool DrawChunk(GSGLOBAL *gsGlobal,
 
   for (uint32_t tileIndex = 0; tileIndex < chunkView.chunk.tileCount; ++tileIndex)
   {
-    TileEntry tile = {};
-    std::memcpy(&tile, &chunkView.tiles[tileIndex], sizeof(TileEntry));
+    // Direct const ref — was unnecessary memcpy into stack copy
+    const TileEntry &tile = chunkView.tiles[tileIndex];
 
     const TilesetDef *tileset = nullptr;
     const atlas2d::AtlasSprite *sprite = nullptr;
@@ -242,8 +265,8 @@ bool DrawVisibleLayer(GSGLOBAL *gsGlobal,
     return false;
   }
 
-  LayerDef layer = {};
-  std::memcpy(&layer, layerView.layer, sizeof(LayerDef));
+  // Direct const ref — was unnecessary memcpy into stack copy
+  const LayerDef &layer = *layerView.layer;
 
   if ((layer.flags & LayerFlag_Visible) == 0)
   {
@@ -270,10 +293,11 @@ bool DrawVisibleLayer(GSGLOBAL *gsGlobal,
 
   for (uint32_t i = 0; i < layer.chunkCount; ++i)
   {
-    ChunkDef chunk = {};
-    std::memcpy(&chunk, &layerView.chunks[i], sizeof(ChunkDef));
-    if (chunk.chunkX < minChunkX || chunk.chunkX > maxChunkX ||
-        chunk.chunkY < minChunkY || chunk.chunkY > maxChunkY)
+    // Direct const ref — was unnecessary memcpy into stack copy
+    // Explicit int cast on uint16_t fields to avoid signed/unsigned comparison
+    const ChunkDef &chunk = layerView.chunks[i];
+    if (static_cast<int>(chunk.chunkX) < minChunkX || static_cast<int>(chunk.chunkX) > maxChunkX ||
+        static_cast<int>(chunk.chunkY) < minChunkY || static_cast<int>(chunk.chunkY) > maxChunkY)
     {
       continue;
     }
