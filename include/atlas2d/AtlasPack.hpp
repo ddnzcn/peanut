@@ -96,6 +96,8 @@ namespace atlas2d
 
 #pragma pack(pop)
 
+  static constexpr uint16_t SpriteFlag_Rotated = 0x0001;
+
 #ifndef __INTELLISENSE__
   static_assert(sizeof(AtlasHeader) == 44, "AtlasHeader size mismatch");
   static_assert(sizeof(AtlasPage) == 30, "AtlasPage size mismatch");
@@ -136,6 +138,7 @@ namespace atlas2d
 
     const AtlasSprite *GetSpriteByIndex(uint32_t index) const;
     const AtlasSprite *FindSpriteById(uint32_t id) const;
+    const AtlasSprite *FindSpriteByIdFast(uint32_t id) const;
     const AtlasSprite *FindSpriteByHash(uint32_t hash) const;
 
     AtlasImageView GetPageImage(uint32_t pageIndex) const;
@@ -151,11 +154,12 @@ namespace atlas2d
     const AtlasHashEntry *m_hashes = nullptr;
     uint32_t m_hashCount = 0;
 
+    std::vector<uint16_t> m_idToIndex;
+    uint32_t m_idBase = 0;
+
     std::string m_lastError;
 
-    static bool ReadWholeFile(const std::string &path,
-                              std::vector<uint8_t> *outBytes,
-                              std::string *outError);
+    void BuildIdLookup();
 
     bool ValidateHeader();
     bool ResolveTables();

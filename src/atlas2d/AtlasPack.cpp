@@ -1,8 +1,5 @@
 #include "atlas2d/AtlasPack.hpp"
-
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
+#include "platform/file_io.hpp"
 
 namespace atlas2d
 {
@@ -21,12 +18,12 @@ bool AtlasPack::Load(const std::string &metaPath, const std::string &atlasPath)
 {
   Clear();
 
-  if (!ReadWholeFile(metaPath, &m_metaBytes, &m_lastError))
+  if (!platform::ReadWholeFile(metaPath, &m_metaBytes, &m_lastError))
   {
     return false;
   }
 
-  if (!ReadWholeFile(atlasPath, &m_atlasBytes, &m_lastError))
+  if (!platform::ReadWholeFile(atlasPath, &m_atlasBytes, &m_lastError))
   {
     return false;
   }
@@ -59,6 +56,7 @@ bool AtlasPack::Load(const std::string &metaPath, const std::string &atlasPath)
     return false;
   }
 
+  BuildIdLookup();
   return true;
 }
 
@@ -73,6 +71,8 @@ void AtlasPack::Clear()
   m_hashes = nullptr;
 
   m_hashCount = 0;
+  m_idToIndex.clear();
+  m_idBase = 0;
   m_lastError.clear();
 }
 
@@ -123,15 +123,99 @@ const AtlasSprite *AtlasPack::FindSpriteById(uint32_t id) const
     return nullptr;
   }
 
-  for (uint32_t i = 0; i < m_header->spriteCount; ++i)
+  uint32_t left = 0;
+  uint32_t right = static_cast<uint32_t>(m_header->spriteCount);
+
+  while (left < right)
   {
-    if (m_sprites[i].id == id)
+    const uint32_t mid = left + (right - left) / 2;
+    if (m_sprites[mid].id == id)
     {
-      return &m_sprites[i];
+      return &m_sprites[mid];
+    }
+    if (id < m_sprites[mid].id)
+    {
+      right = mid;
+    }
+    else
+    {
+      left = mid + 1;
     }
   }
 
   return nullptr;
+}
+
+// O(1) lookup via flat table built at load time. Falls back to O(n) linear
+// scan if the table wasn't built (ID range too large or no sprites loaded).
+const AtlasSprite *AtlasPack::FindSpriteByIdFast(uint32_t id) const
+{
+  if (!m_sprites || !m_header || m_idToIndex.empty())
+  {
+    return FindSpriteById(id);
+  }
+
+  if (id < m_idBase)
+  {
+    return nullptr;
+  }
+
+  const uint32_t offset = id - m_idBase;
+  if (offset >= static_cast<uint32_t>(m_idToIndex.size()))
+  {
+    return nullptr;
+  }
+
+  const uint16_t index = m_idToIndex[offset];
+  if (index == 0xFFFF)
+  {
+    return nullptr;
+  }
+
+  return &m_sprites[index];
+}
+
+// Builds a flat ID→sprite-index table for O(1) lookup in the render hot path.
+// Only built if the ID range fits in 64K entries (~128KB on PS2).
+void AtlasPack::BuildIdLookup()
+{
+  m_idToIndex.clear();
+  m_idBase = 0;
+
+  if (!m_sprites || !m_header || m_header->spriteCount == 0)
+  {
+    return;
+  }
+
+  uint32_t minId = m_sprites[0].id;
+  uint32_t maxId = m_sprites[0].id;
+  for (uint32_t i = 1; i < m_header->spriteCount; ++i)
+  {
+    if (m_sprites[i].id < minId)
+    {
+      minId = m_sprites[i].id;
+    }
+    if (m_sprites[i].id > maxId)
+    {
+      maxId = m_sprites[i].id;
+    }
+  }
+
+  const uint32_t range = maxId - minId + 1;
+
+  // Only build flat table if range is reasonable (< 64K entries, ~128KB on PS2)
+  if (range > 65535u)
+  {
+    return;
+  }
+
+  m_idBase = minId;
+  m_idToIndex.resize(range, 0xFFFF);
+
+  for (uint32_t i = 0; i < m_header->spriteCount; ++i)
+  {
+    m_idToIndex[m_sprites[i].id - minId] = static_cast<uint16_t>(i);
+  }
 }
 
 const AtlasSprite *AtlasPack::FindSpriteByHash(uint32_t hash) const
@@ -221,49 +305,6 @@ SpriteUVRect AtlasPack::ComputeUVs(const AtlasSprite &sprite) const
   uv.v1 = static_cast<float>(sprite.y + sprite.h) * invH;
 
   return uv;
-}
-
-bool AtlasPack::ReadWholeFile(const std::string &path,
-                              std::vector<uint8_t> *outBytes,
-                              std::string *outError)
-{
-  outBytes->clear();
-
-  int fd = open(path.c_str(), O_RDONLY);
-  if (fd < 0)
-  {
-    *outError = "Failed to open file: " + path;
-    return false;
-  }
-
-  struct stat st;
-  if (fstat(fd, &st) == 0 && st.st_size > 0)
-  {
-    outBytes->reserve(static_cast<size_t>(st.st_size));
-  }
-
-  uint8_t chunk[4096];
-  for (;;)
-  {
-    const int bytesRead = read(fd, chunk, sizeof(chunk));
-    if (bytesRead < 0)
-    {
-      close(fd);
-      outBytes->clear();
-      *outError = "Failed to read file: " + path;
-      return false;
-    }
-
-    if (bytesRead == 0)
-    {
-      break;
-    }
-
-    outBytes->insert(outBytes->end(), chunk, chunk + bytesRead);
-  }
-
-  close(fd);
-  return true;
 }
 
 bool AtlasPack::ValidateHeader()
@@ -437,6 +478,12 @@ bool AtlasPack::ValidatePages()
     if (x2 > page.width || y2 > page.height)
     {
       m_lastError = "Sprite rect out of page bounds";
+      return false;
+    }
+
+    if (i > 0 && m_sprites[i].id <= m_sprites[i - 1].id)
+    {
+      m_lastError = "Sprite table not sorted by id (required for binary search)";
       return false;
     }
   }
