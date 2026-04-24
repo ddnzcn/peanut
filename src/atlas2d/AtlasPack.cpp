@@ -71,6 +71,10 @@ void AtlasPack::Clear()
   m_pages = nullptr;
   m_sprites = nullptr;
   m_hashes = nullptr;
+  m_anims = nullptr;
+  m_frames = nullptr;
+  m_animTiles = nullptr;
+  m_animTileFrames = nullptr;
 
   m_hashCount = 0;
   m_lastError.clear();
@@ -104,6 +108,148 @@ uint16_t AtlasPack::GetPageCount() const
 uint16_t AtlasPack::GetSpriteCount() const
 {
   return m_header ? m_header->spriteCount : 0;
+}
+
+uint16_t AtlasPack::GetAnimCount() const
+{
+  return m_header ? m_header->animCount : 0;
+}
+
+const AtlasAnim *AtlasPack::GetAnims() const
+{
+  return m_anims;
+}
+
+const AtlasFrame *AtlasPack::GetFrames() const
+{
+  return m_frames;
+}
+
+const AtlasAnim *AtlasPack::FindAnimByHash(uint32_t nameHash) const
+{
+  if (!m_anims || !m_header)
+  {
+    return nullptr;
+  }
+
+  for (uint16_t i = 0; i < m_header->animCount; ++i)
+  {
+    if (m_anims[i].nameHash == nameHash)
+    {
+      return &m_anims[i];
+    }
+  }
+
+  return nullptr;
+}
+
+uint32_t AtlasPack::ResolveAnimFrame(uint32_t nameHash, uint32_t timeMs) const
+{
+  const AtlasAnim *anim = FindAnimByHash(nameHash);
+  if (!anim || !m_frames || anim->frameCount == 0)
+  {
+    return UINT32_MAX;
+  }
+
+  // Compute total duration
+  uint32_t totalMs = 0;
+  for (uint16_t i = 0; i < anim->frameCount; ++i)
+  {
+    totalMs += m_frames[anim->firstFrame + i].durationMs;
+  }
+
+  if (totalMs == 0)
+  {
+    return m_frames[anim->firstFrame].spriteIndex;
+  }
+
+  // Wrap time if looping
+  if (anim->flags & AtlasAnimFlag_Loop)
+  {
+    timeMs = timeMs % totalMs;
+  }
+  else if (timeMs >= totalMs)
+  {
+    // Clamp to last frame when not looping
+    return m_frames[anim->firstFrame + anim->frameCount - 1].spriteIndex;
+  }
+
+  // Walk frames to find the current one
+  uint32_t cursor = 0;
+  for (uint16_t i = 0; i < anim->frameCount; ++i)
+  {
+    const AtlasFrame &frame = m_frames[anim->firstFrame + i];
+    cursor += frame.durationMs;
+    if (timeMs < cursor)
+    {
+      return frame.spriteIndex;
+    }
+  }
+
+  return m_frames[anim->firstFrame + anim->frameCount - 1].spriteIndex;
+}
+
+uint16_t AtlasPack::GetAnimTileCount() const
+{
+  return m_header ? m_header->animTileCount : 0;
+}
+
+const AtlasAnimTile *AtlasPack::GetAnimTiles() const
+{
+  return m_animTiles;
+}
+
+const AtlasAnimTileFrame *AtlasPack::GetAnimTileFrames() const
+{
+  return m_animTileFrames;
+}
+
+uint32_t AtlasPack::ResolveAnimTileFrame(uint32_t baseSpriteIndex, uint32_t timeMs) const
+{
+  if (!m_animTiles || !m_animTileFrames || !m_header || m_header->animTileCount == 0)
+  {
+    return baseSpriteIndex;
+  }
+
+  // Linear search for the animated tile matching this base sprite
+  for (uint16_t i = 0; i < m_header->animTileCount; ++i)
+  {
+    const AtlasAnimTile &animTile = m_animTiles[i];
+    if (animTile.baseSpriteIndex != baseSpriteIndex || animTile.frameCount == 0)
+    {
+      continue;
+    }
+
+    // Compute total duration
+    uint32_t totalMs = 0;
+    for (uint16_t f = 0; f < animTile.frameCount; ++f)
+    {
+      totalMs += m_animTileFrames[animTile.firstFrame + f].durationMs;
+    }
+
+    if (totalMs == 0)
+    {
+      return m_animTileFrames[animTile.firstFrame].spriteIndex;
+    }
+
+    // Animated tiles always loop
+    const uint32_t wrappedMs = timeMs % totalMs;
+
+    uint32_t cursor = 0;
+    for (uint16_t f = 0; f < animTile.frameCount; ++f)
+    {
+      const AtlasAnimTileFrame &frame = m_animTileFrames[animTile.firstFrame + f];
+      cursor += frame.durationMs;
+      if (wrappedMs < cursor)
+      {
+        return frame.spriteIndex;
+      }
+    }
+
+    return m_animTileFrames[animTile.firstFrame + animTile.frameCount - 1].spriteIndex;
+  }
+
+  return baseSpriteIndex;
 }
 
 const AtlasSprite *AtlasPack::GetSpriteByIndex(uint32_t index) const
@@ -345,6 +491,64 @@ bool AtlasPack::ResolveTables()
       m_metaBytes.data() + m_header->pageTableOffset);
   m_sprites = reinterpret_cast<const AtlasSprite *>(
       m_metaBytes.data() + m_header->spriteTableOffset);
+
+  if (m_header->animCount > 0 && m_header->animTableOffset != 0)
+  {
+    const uint32_t animsSize =
+        static_cast<uint32_t>(m_header->animCount) * sizeof(AtlasAnim);
+
+    if (m_header->animTableOffset % 4 != 0)
+    {
+      m_lastError = "Anim table offset not 4-byte aligned";
+      return false;
+    }
+
+    if (AddOverflowsRange(m_header->animTableOffset, animsSize, metaSize))
+    {
+      m_lastError = "Anim table out of range";
+      return false;
+    }
+
+    m_anims = reinterpret_cast<const AtlasAnim *>(
+        m_metaBytes.data() + m_header->animTableOffset);
+
+    if (m_header->frameTableOffset != 0 &&
+        m_header->frameTableOffset >= m_header->animTableOffset &&
+        m_header->frameTableOffset < metaSize)
+    {
+      m_frames = reinterpret_cast<const AtlasFrame *>(
+          m_metaBytes.data() + m_header->frameTableOffset);
+    }
+  }
+
+  if (m_header->animTileCount > 0 && m_header->animTileTableOffset != 0)
+  {
+    const uint32_t animTilesSize =
+        static_cast<uint32_t>(m_header->animTileCount) * sizeof(AtlasAnimTile);
+
+    if (m_header->animTileTableOffset % 4 != 0)
+    {
+      m_lastError = "Anim tile table offset not 4-byte aligned";
+      return false;
+    }
+
+    if (AddOverflowsRange(m_header->animTileTableOffset, animTilesSize, metaSize))
+    {
+      m_lastError = "Anim tile table out of range";
+      return false;
+    }
+
+    m_animTiles = reinterpret_cast<const AtlasAnimTile *>(
+        m_metaBytes.data() + m_header->animTileTableOffset);
+
+    if (m_header->animTileFrameTableOffset != 0 &&
+        m_header->animTileFrameTableOffset > m_header->animTileTableOffset &&
+        m_header->animTileFrameTableOffset < metaSize)
+    {
+      m_animTileFrames = reinterpret_cast<const AtlasAnimTileFrame *>(
+          m_metaBytes.data() + m_header->animTileFrameTableOffset);
+    }
+  }
 
   if (m_header->hashTableOffset != 0)
   {

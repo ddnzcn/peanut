@@ -204,6 +204,24 @@ bool DrawChunk(GSGLOBAL *gsGlobal,
       continue;
     }
 
+    // Substitute animated tile frame if one exists for this sprite
+    if (atlasPack.GetAnimTileCount() > 0)
+    {
+      const uint32_t baseSpriteIndex =
+          static_cast<uint32_t>(sprite - atlasPack.GetSprites());
+      const uint32_t resolvedIndex =
+          atlasPack.ResolveAnimTileFrame(baseSpriteIndex, params.timeMs);
+      if (resolvedIndex != baseSpriteIndex)
+      {
+        const atlas2d::AtlasSprite *resolved =
+            atlasPack.GetSpriteByIndex(resolvedIndex);
+        if (resolved && resolved->pageIndex == atlasPageIndex)
+        {
+          sprite = resolved;
+        }
+      }
+    }
+
     const uint32_t localTileX = tileIndex % header.chunkWidthTiles;
     const uint32_t localTileY = tileIndex / header.chunkWidthTiles;
 

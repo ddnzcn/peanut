@@ -39,6 +39,11 @@ namespace atlas2d
     uint32_t animTableOffset;
     uint32_t frameTableOffset;
     uint32_t hashTableOffset;
+
+    uint16_t animTileCount;
+    uint16_t reserved0;
+    uint32_t animTileTableOffset;
+    uint32_t animTileFrameTableOffset;
   };
 
   struct AtlasPage
@@ -94,13 +99,57 @@ namespace atlas2d
     uint32_t spriteIndex;
   };
 
+  enum AtlasAnimFlags : uint16_t
+  {
+    AtlasAnimFlag_None = 0,
+    AtlasAnimFlag_Loop = 1 << 0
+  };
+
+  // Animation clip entry — one per named animation
+  struct AtlasAnim
+  {
+    uint32_t nameHash;       // FNV1a32 of the animation name
+    uint16_t firstFrame;     // Index into the frame table
+    uint16_t frameCount;     // Number of frames in this clip
+    uint16_t flags;          // AtlasAnimFlags
+    uint16_t reserved;
+  };
+
+  // Animation frame entry — sprite + duration
+  struct AtlasFrame
+  {
+    uint32_t spriteIndex;    // Index into the sprite table
+    uint16_t durationMs;     // Frame display time in milliseconds
+    uint16_t flags;          // Reserved, 0
+  };
+
+  // Animated tile entry — maps a base sprite to a cycling sequence of frames
+  struct AtlasAnimTile
+  {
+    uint32_t baseSpriteIndex; // Sprite index of the base (identity) tile
+    uint16_t firstFrame;      // Index into the anim tile frame table
+    uint16_t frameCount;      // Number of frames in the cycle
+  };
+
+  // Animated tile frame — one frame of an AtlasAnimTile sequence
+  struct AtlasAnimTileFrame
+  {
+    uint32_t spriteIndex; // Sprite index to display for this frame
+    uint16_t durationMs;  // Frame display time in milliseconds
+    uint16_t reserved;    // Reserved, 0
+  };
+
 #pragma pack(pop)
 
 #ifndef __INTELLISENSE__
-  static_assert(sizeof(AtlasHeader) == 44, "AtlasHeader size mismatch");
+  static_assert(sizeof(AtlasHeader) == 56, "AtlasHeader size mismatch");
   static_assert(sizeof(AtlasPage) == 30, "AtlasPage size mismatch");
   static_assert(sizeof(AtlasSprite) == 40, "AtlasSprite size mismatch");
   static_assert(sizeof(AtlasHashEntry) == 8, "AtlasHashEntry size mismatch");
+  static_assert(sizeof(AtlasAnim) == 12, "AtlasAnim size mismatch");
+  static_assert(sizeof(AtlasFrame) == 8, "AtlasFrame size mismatch");
+  static_assert(sizeof(AtlasAnimTile) == 8, "AtlasAnimTile size mismatch");
+  static_assert(sizeof(AtlasAnimTileFrame) == 8, "AtlasAnimTileFrame size mismatch");
 #endif
 
   struct AtlasImageView
@@ -133,10 +182,24 @@ namespace atlas2d
 
     uint16_t GetPageCount() const;
     uint16_t GetSpriteCount() const;
+    uint16_t GetAnimCount() const;
 
     const AtlasSprite *GetSpriteByIndex(uint32_t index) const;
     const AtlasSprite *FindSpriteById(uint32_t id) const;
     const AtlasSprite *FindSpriteByHash(uint32_t hash) const;
+
+    const AtlasAnim *GetAnims() const;
+    const AtlasFrame *GetFrames() const;
+    const AtlasAnim *FindAnimByHash(uint32_t nameHash) const;
+    // Returns the sprite index for the given animation at timeMs, or UINT32_MAX if not found
+    uint32_t ResolveAnimFrame(uint32_t nameHash, uint32_t timeMs) const;
+
+    uint16_t GetAnimTileCount() const;
+    const AtlasAnimTile *GetAnimTiles() const;
+    const AtlasAnimTileFrame *GetAnimTileFrames() const;
+    // Returns the sprite index for the animated tile whose base is baseSpriteIndex at timeMs.
+    // Returns baseSpriteIndex unchanged if no animated tile entry is found.
+    uint32_t ResolveAnimTileFrame(uint32_t baseSpriteIndex, uint32_t timeMs) const;
 
     AtlasImageView GetPageImage(uint32_t pageIndex) const;
     SpriteUVRect ComputeUVs(const AtlasSprite &sprite) const;
@@ -150,6 +213,10 @@ namespace atlas2d
     const AtlasSprite *m_sprites = nullptr;
     const AtlasHashEntry *m_hashes = nullptr;
     uint32_t m_hashCount = 0;
+    const AtlasAnim *m_anims = nullptr;
+    const AtlasFrame *m_frames = nullptr;
+    const AtlasAnimTile *m_animTiles = nullptr;
+    const AtlasAnimTileFrame *m_animTileFrames = nullptr;
 
     std::string m_lastError;
 

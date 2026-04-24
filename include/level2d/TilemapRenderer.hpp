@@ -19,6 +19,7 @@ namespace level2d
     float originX = 0.0f;
     float originY = 0.0f;
     float scale = 1.0f;
+    uint32_t timeMs = 0;
   };
 
   bool DrawChunk(GSGLOBAL *gsGlobal,
