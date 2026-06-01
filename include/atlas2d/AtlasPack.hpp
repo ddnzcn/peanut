@@ -25,72 +25,49 @@ namespace atlas2d
     uint32_t magic;
     uint16_t versionMajor;
     uint16_t versionMinor;
-
     uint32_t fileSize;
     uint32_t crc32;
-
     uint16_t pageCount;
     uint16_t spriteCount;
     uint16_t animCount;
-    uint16_t flags;
-
+    uint16_t animFrameCount;
+    uint16_t animTileCount;
+    uint16_t animTileFrameCount;
+    uint16_t hashEntryCount;
+    uint16_t _pad;
     uint32_t pageTableOffset;
     uint32_t spriteTableOffset;
     uint32_t animTableOffset;
-    uint32_t frameTableOffset;
+    uint32_t animFrameTableOffset;
     uint32_t hashTableOffset;
-
-    uint16_t animTileCount;
-    uint16_t reserved0;
     uint32_t animTileTableOffset;
-    uint32_t animTileFrameTableOffset;
   };
 
   struct AtlasPage
   {
-    uint32_t dataOffset;
-    uint32_t dataSize;
-
+    uint16_t pageIndex;
     uint16_t width;
     uint16_t height;
-
-    uint8_t format;
-    uint8_t flags;
-
-    uint16_t clutEntryCount;
-    uint16_t tbw;
-
-    uint32_t clutOffset;
-    uint32_t user0;
-    uint32_t user1;
+    uint32_t dataOffset;
+    uint32_t dataSize;
+    uint8_t reserved[16];
   };
 
   struct AtlasSprite
   {
     uint32_t id;
     uint32_t nameHash;
-
     uint16_t pageIndex;
     uint16_t flags;
-
     uint16_t x;
     uint16_t y;
     uint16_t w;
     uint16_t h;
-
-    int16_t pivotX;
-    int16_t pivotY;
-
+    uint16_t trimX;
+    uint16_t trimY;
     uint16_t sourceW;
     uint16_t sourceH;
-
-    int16_t trimX;
-    int16_t trimY;
-
-    int16_t hitboxX;
-    int16_t hitboxY;
-    uint16_t hitboxW;
-    uint16_t hitboxH;
+    uint8_t reserved[12];
   };
 
   struct AtlasHashEntry
@@ -105,38 +82,34 @@ namespace atlas2d
     AtlasAnimFlag_Loop = 1 << 0
   };
 
-  // Animation clip entry — one per named animation
   struct AtlasAnim
   {
-    uint32_t nameHash;       // FNV1a32 of the animation name
-    uint16_t firstFrame;     // Index into the frame table
-    uint16_t frameCount;     // Number of frames in this clip
-    uint16_t flags;          // AtlasAnimFlags
-    uint16_t reserved;
+    uint32_t nameHash;
+    uint16_t firstFrameIndex;
+    uint16_t frameCount;
+    uint16_t flags;
+    uint16_t _pad;
   };
 
-  // Animation frame entry — sprite + duration
   struct AtlasFrame
   {
-    uint32_t spriteIndex;    // Index into the sprite table
-    uint16_t durationMs;     // Frame display time in milliseconds
-    uint16_t flags;          // Reserved, 0
+    uint32_t spriteIndex;
+    uint16_t durationMs;
+    uint16_t _pad;
   };
 
-  // Animated tile entry — maps a base sprite to a cycling sequence of frames
   struct AtlasAnimTile
   {
-    uint32_t baseSpriteIndex; // Sprite index of the base (identity) tile
-    uint16_t firstFrame;      // Index into the anim tile frame table
-    uint16_t frameCount;      // Number of frames in the cycle
+    uint32_t baseSpriteIndex;
+    uint16_t firstFrameIndex;
+    uint16_t frameCount;
   };
 
-  // Animated tile frame — one frame of an AtlasAnimTile sequence
   struct AtlasAnimTileFrame
   {
-    uint32_t spriteIndex; // Sprite index to display for this frame
-    uint16_t durationMs;  // Frame display time in milliseconds
-    uint16_t reserved;    // Reserved, 0
+    uint32_t spriteIndex;
+    uint16_t durationMs;
+    uint16_t _pad;
   };
 
 #pragma pack(pop)

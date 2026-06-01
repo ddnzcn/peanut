@@ -1,665 +1,275 @@
 # PS2 Jam Engine Architecture Notes
 
 ## Goal
-Build a small, PS2-friendly 2D tile-based engine with a native C++ core and a QuickJS scripting layer for gameplay behavior.
+Build a small, PS2-friendly 2D game engine with a native C++ core and a scene graph rendering pipeline. QuickJS scripting layer planned for gameplay behavior.
 
-This document is intentionally practical. It is not a full PS2 architecture reference. It is a planning document for getting to a working game-jam engine with the least architectural regret.
+This document is a planning document for getting to a working game-jam engine with the least architectural regret.
 
 ---
 
 ## 1. Project goals
 
 ### Primary goals
-- [ ] Build a tile-based 2D game runtime that is stable on PS2SDK
-- [ ] Keep the native engine simple enough to finish before the jam
+- [x] Build a tile-based 2D game runtime that is stable on PS2SDK
+- [x] Keep the native engine simple enough to finish before the jam
 - [ ] Expose enough scripting to make gameplay iteration fast
-- [ ] Avoid architecture choices that fight the PS2
-- [ ] Keep rendering, collision, and update logic predictable
+- [x] Avoid architecture choices that fight the PS2
+- [x] Keep rendering, collision, and update logic predictable
 
 ### Non-goals for v1
-- [ ] No 3D engine work
-- [ ] No VU-heavy architecture
-- [ ] No general-purpose ECS
-- [ ] No advanced physics engine
-- [ ] No editor tooling unless absolutely necessary
-- [ ] No inheritance-heavy game object model in script
+- [x] No 3D engine work
+- [x] No VU-heavy architecture
+- [x] No general-purpose ECS
+- [x] No advanced physics engine
+- [x] No editor tooling (handled by peanut-assman)
+- [x] No inheritance-heavy game object model in script
 
 ---
 
 ## 2. PS2 architecture: only what matters for this engine
 
 ### EE (Emotion Engine)
-This is where the main game logic should live.
-
-Use the EE for:
-- [ ] main loop
-- [ ] scene management
-- [ ] entity update
+- [x] main loop
+- [x] scene management (PSCN scene graph)
+- [ ] entity update (via script handlers)
 - [ ] tile collision
-- [ ] camera logic
+- [x] camera logic (via game scripts)
 - [ ] QuickJS host runtime
-- [ ] asset management
-
-Do not overcomplicate this.
+- [x] asset management (atlas + PSCN loader)
 
 ### GS (Graphics Synthesizer)
-Treat the GS as a low-level renderer. For v1, build a simple 2D render path.
-
-Rendering model should be:
-- [ ] clear
-- [ ] draw tile layers
-- [ ] draw entities
+Rendering model:
+- [x] clear
+- [x] draw scene graph (tilemaps, sprites, animated sprites by render layer)
 - [ ] draw UI/debug text
-- [ ] flip
+- [x] flip
 
 ### IOP
-Treat the IOP as the place where supporting modules and device-facing services live.
-
-For now:
-- [ ] use PS2SDK libraries normally
-- [ ] avoid custom IOP architecture unless needed later
+- [x] use PS2SDK libraries normally (SIO2MAN, PADMAN)
 
 ### VU0 / VU1
-Do not design around them for v1.
-
-- [ ] no gameplay dependence on VUs
-- [ ] no attempt to offload tile/collision logic to vector units
-- [ ] revisit only if there is a proven bottleneck later
+- [x] no gameplay dependence on VUs for v1
 
 ### Memory constraints
-Assume memory discipline matters from day one.
-
-This affects:
-- [ ] entity storage
-- [ ] tilemap storage
-- [ ] texture usage
-- [ ] JS heap pressure
-- [ ] temporary allocation behavior
+- [x] Fixed-size arrays for scene nodes (512 max), script handlers (64), bindings (512)
+- [x] Extension data in contiguous 8KB blob, no per-node allocation
+- [x] Atlas pixel data in single memaligned buffer
+- [x] No per-frame heap allocation in hot paths
 
 ---
 
 ## 3. High-level architecture
 
-The main rule:
-
 **Native owns the world. Script owns behavior.**
 
-### Native C++ owns
-- [ ] engine loop
-- [ ] scene storage
-- [ ] tilemap data
-- [ ] collision map
-- [ ] entity pool
-- [ ] camera state
-- [ ] rendering
-- [ ] input state snapshots
-- [ ] asset/resource lifetimes
+### Engine (native C++) owns
+- [x] engine loop (`Engine::run/init/tick/shutdown`)
+- [x] scene storage (`SceneTree` — fixed 512-node array)
+- [x] PSCN scene loading (`PscnFile`)
+- [x] world transform computation (single O(N) forward pass)
+- [x] rendering pipeline (`RenderScene` — render-layer sorted)
+- [x] atlas/texture management (`AtlasPack`)
+- [x] input state snapshots (pad reading)
+- [x] script dispatch (`ScriptRegistry`)
+- [x] asset/resource lifetimes
 
-### QuickJS owns
-- [ ] game rules
-- [ ] scene setup scripts
-- [ ] per-entity behavior callbacks
+### Game scripts (C++ for now, QuickJS later) own
+- [x] per-node behavior callbacks (registered by scriptId string)
+- [x] camera follow logic
+- [x] player movement
+- [ ] game rules, scene setup
 - [ ] scripted triggers/events
-- [ ] high-level orchestration
 
-### Avoid
-- [ ] duplicated world state in C++ and JS
-- [ ] JS as the owner of core engine memory
-- [ ] deep object graphs with unclear ownership
-- [ ] per-frame creation/destruction of large numbers of wrapped objects
+### Engine/game boundary
+- Engine holds `game::GameContext` directly as a member
+- Script handlers receive node index + `void* gameCtx`
+- Game code never includes engine internals beyond the public API
+- When QuickJS arrives, the `ScriptRegistry` can delegate to JS callbacks via a bridge handler
 
 ---
 
 ## 4. Engine systems
 
-### 4.1 Engine
-Responsibilities:
-- [ ] initialize runtime
-- [ ] initialize input
-- [ ] initialize renderer
-- [ ] initialize scripting VM
-- [ ] run fixed-timestep loop
-- [ ] dispatch update and render phases
+### 4.1 Engine (`engine::Engine`)
+- [x] Initialize DMA, GS, pad
+- [x] Load atlas + PSCN scene
+- [x] Build scene tree + compute world transforms
+- [x] Register game scripts + bind to scene nodes
+- [x] Run tick loop: transforms → script update → render → flip
 
-Suggested shape:
-- [ ] `Engine`
-- [ ] `run()`
-- [ ] `step(dt)`
-- [ ] `render()`
-- [ ] `shutdown()`
+### 4.2 Scene graph (`engine::SceneTree`)
+Node types from PSCN format:
 
-### 4.2 TileScene2D
-This should be the main gameplay container.
+| Type | Value | Extension | Status |
+|------|-------|-----------|--------|
+| Root | 0 | none | Loaded |
+| Node2D | 1 | none | Loaded |
+| Sprite | 2 | 12 bytes (spriteId, flip, tint) | Rendered |
+| TileMap | 3 | 24 bytes (dimensions, projection, chunks) | Rendered |
+| CollisionShape | 4 | 16 bytes (shape, dimensions) | Loaded, not used yet |
+| Area | 5 | 16 bytes (shape, dimensions, tag) | Loaded, not used yet |
+| Light2D | 6 | 20 bytes (radius, color, falloff) | Loaded, not used yet |
+| AnimatedSprite | 7 | 16 bytes (animHash, flip, tint, default) | Rendered |
 
-Responsibilities:
-- [ ] own map dimensions
-- [ ] own tile layers
-- [ ] own collision layer
-- [ ] own entity pool
-- [ ] own active camera
-- [ ] provide scene-level update hooks
+Scene tree features:
+- [x] Pre-order node array (max 512 nodes)
+- [x] World transform computation via parent chain accumulation
+- [x] Render order sorted by `renderLayer` (insertion sort, stable)
+- [x] Extension blob for type-specific data (8KB fixed buffer)
+- [x] Parallax per node
+- [x] Collision layer/mask per node (stored, not checked yet)
 
-Suggested API goals:
-- [ ] create entity
-- [ ] set tile
-- [ ] get tile
-- [ ] set collision flags
-- [ ] query solid/hazard tiles
-- [ ] update scene
-- [ ] render scene
+### 4.3 Script system (`engine::ScriptRegistry`)
+- [x] C++ function pointer handlers (init/update/destroy)
+- [x] Registered by scriptId string → FNV-1a hash
+- [x] Bound to scene nodes at load time
+- [x] Max 64 handlers, max 512 bindings
+- [x] `void* gameCtx` passed opaquely
 
-### 4.3 Entity2D
-Keep entities data-oriented.
+### 4.4 Scene renderer (`engine::RenderScene`)
+- [x] Sprites: atlas lookup → world transform → parallax offset → textured quad
+- [x] Animated sprites: `ResolveAnimFrame` → sprite lookup → render
+- [x] Tilemaps: chunk culling → tileset remap → animated tile substitution → tile quads
+- [x] Tile transforms: flipX, flipY, rot90 via UV manipulation
+- [x] Orthographic projection
+- [ ] Isometric projection (diamond + staggered) — code path exists, untested
 
-Suggested native fields:
-- [ ] id
-- [ ] active flag
-- [ ] visible flag
-- [ ] x, y
-- [ ] vx, vy
-- [ ] w, h
-- [ ] grounded
-- [ ] tag/type
-- [ ] collision flags
-- [ ] sprite/tile/frame reference
-- [ ] script callback handle(s)
-
-Responsibilities:
-- [ ] movement state
-- [ ] collision state
-- [ ] render data reference
-- [ ] script hooks
-
-### 4.4 Camera2D
-Keep this minimal in v1.
-
-Suggested fields:
-- [ ] x, y
-- [ ] viewport width
-- [ ] viewport height
-- [ ] followed entity id/handle
-- [ ] clamp flags
-
-Suggested features:
-- [ ] manual positioning
-- [ ] follow entity
-- [ ] clamp to scene bounds
-- [ ] optional deadzone later
-
-### 4.5 Renderer2D
-Keep renderer scope intentionally narrow.
-
-Render responsibilities:
-- [ ] clear screen
-- [ ] draw tile layers
-- [ ] draw sprite quads
-- [ ] apply camera offset
-- [ ] draw debug overlay
-- [ ] present frame
-
-Avoid in v1:
-- [ ] complex batching systems before needed
-- [ ] material systems
-- [ ] generalized scene graph
-- [ ] expensive abstraction layers
+### 4.5 Atlas system (`atlas2d::AtlasPack`)
+- [x] Binary atlas loader (meta + pixel data)
+- [x] Sprite lookup by ID, hash, or index
+- [x] Animation frame resolution by time
+- [x] Animated tile frame resolution
+- [x] gsKit texture upload + VRAM management
+- [x] FNV-1a hash function
 
 ### 4.6 Input
-Keep input state stable and frame-based.
+- [x] Per-frame pad button snapshot
+- [x] Exposed to game via `GameContext::padButtons`
+- [ ] Pressed/released edge detection
 
-Need:
-- [ ] pressed
-- [ ] released
-- [ ] held/down
-- [ ] per-frame snapshot
-
-Expose to script cleanly.
-
-### 4.7 ScriptVM
-QuickJS integration layer.
-
-Responsibilities:
-- [ ] create runtime/context
-- [ ] install modules/classes
-- [ ] load scripts
-- [ ] call update callbacks
-- [ ] report script errors cleanly
-
-Need early decisions:
-- [ ] how native objects are wrapped
-- [ ] how callbacks are stored
-- [ ] how entity handles are validated
+### 4.7 Asset path resolution (`platform::ResolveAssetPath`)
+- [x] `host:` (ps2client debug)
+- [x] `mass:/` (USB)
+- [x] `cdrom0:\;1` (disc)
+- [x] Configurable via `ASSET_DEVICE` and `ASSET_ROOT` build flags
 
 ---
 
 ## 5. Update loop
 
-Use a fixed timestep.
+Fixed timestep at 1/60 (16ms per frame).
 
-### Target
-- [ ] fixed `dt = 1/60`
-
-### Main loop
-- [ ] poll input
-- [ ] step fixed update
-- [ ] render
-
-### Update order draft
-1. [ ] sample input
-2. [ ] run scene-level script update
-3. [ ] run entity script updates
-4. [ ] apply native movement and physics
-5. [ ] resolve collisions
-6. [ ] update camera
-7. [ ] render frame
-
-### Important rule
-Native should stay in control of timing.
-
-Do not let script drive the main loop in v1.
+### Tick order
+1. [x] Sample pad input
+2. [x] Compute world transforms (so scripts read current-frame positions)
+3. [x] Run script `onUpdate` callbacks
+4. [x] Clear screen
+5. [x] Render scene graph by render layer
+6. [x] Queue exec + sync flip
 
 ---
 
 ## 6. Collision model
 
-Use simple axis-aligned collision.
+### Current state
+- [x] CollisionShape and Area nodes loaded from PSCN
+- [x] collision layer/mask stored per node (32-bit bitmasks)
+- [ ] AABB collision detection not implemented
+- [ ] Collision callbacks not implemented
 
-### Collision approach
-- [ ] AABB for entities
-- [ ] tile-grid collision for world
-- [ ] axis-separated resolution
-- [ ] fixed collision flags/properties
-
-### World collision
-Need tile flags such as:
-- [ ] solid
-- [ ] one-way platform
-- [ ] hazard
-- [ ] ladder
-- [ ] trigger
-
-### Entity collision
-Decide whether v1 supports:
-- [ ] entity vs world only
-- [ ] entity vs entity overlap events
-- [ ] entity vs entity blocking collisions
-
-Suggested v1:
-- [ ] entity vs world blocking
-- [ ] entity vs entity overlap callbacks
-- [ ] no full rigid-body behavior
-
-### Native collision responsibilities
-- [ ] integrate velocity
-- [ ] resolve X axis
-- [ ] resolve Y axis
-- [ ] set grounded flag
-- [ ] emit collision events/callbacks
+### Planned approach
+- AABB for entity nodes
+- Tile-grid collision via CollisionShape nodes
+- Collision rule: `(a.layer & b.mask) != 0 || (b.layer & a.mask) != 0`
+- Axis-separated resolution
 
 ---
 
 ## 7. Memory and ownership
 
-This is one of the most important sections.
+### Allocation strategy
+| System | Storage | Size |
+|--------|---------|------|
+| Scene nodes | `SceneNode[512]` fixed array | ~48 KB |
+| Extension data | `uint8_t[8192]` fixed blob | 8 KB |
+| Render order | `uint16_t[512]` fixed array | 1 KB |
+| Script handlers | `ScriptHandler[64]` fixed | ~2 KB |
+| Script bindings | `ScriptBinding[512]` fixed | ~4 KB |
+| Node offsets (loader) | `uint32_t[512]` fixed | 2 KB |
+| Atlas meta/pixels | `vector<uint8_t>` (allocated once) | varies |
+| PSCN file blob | `vector<uint8_t>` (allocated once) | varies |
+| Atlas page buffer | `memalign(128, ...)` (allocated once) | varies |
 
-### Core rules
-- [ ] avoid per-frame heap allocation in hot paths
-- [ ] prefer pools or stable slot arrays
-- [ ] prefer fixed-capacity containers where practical
-- [ ] keep lifetime explicit
-
-### Entity storage
-Recommended:
-- [ ] entity pool / slot array
-- [ ] stable numeric IDs
-- [ ] free-list for reuse
-
-Avoid:
-- [ ] raw pointers exposed directly to script if they can become invalid
-- [ ] `std::vector` reallocation invalidating script-facing object pointers
-
-### Script wrapper strategy
-Recommended:
-- [ ] JS wrapper stores scene ref + entity id
-- [ ] every access validates id against native pool
-- [ ] destroyed entity wrappers fail safely
-
-### Resource ownership
-Native should own:
-- [ ] textures
-- [ ] maps
-- [ ] sound resources
-- [ ] script bytecode/source lifetime containers if needed
-
-Use RAII for native resources where cleanup matters.
+No per-frame heap allocation in tick/render.
 
 ---
 
-## 8. C++ style choices
+## 8. File structure
 
-### Good uses of C++ here
-- [ ] RAII for resources
-- [ ] modules/namespaces
-- [ ] light classes for systems
-- [ ] simple wrappers over C APIs
+```
+include/
+  engine/
+    engine.hpp                    Engine class
+    scene/
+      PscnTypes.hpp               PSCN binary format structs
+      PscnLoader.hpp              Scene file loader
+      SceneTree.hpp               Runtime node tree
+      ScriptRegistry.hpp          Script handler dispatch
+      SceneRenderer.hpp           Scene rendering
+  atlas2d/
+    AtlasPack.hpp                 Atlas binary loader
+    AtlasPackUtils.hpp            gsKit drawing helpers
+  game/
+    GameContext.hpp                Game state
+    GameScripts.hpp               Script handler registration
+  platform/
+    asset_path.hpp                PS2 device path resolution
 
-### Keep gameplay data plain
-Recommended:
-- [ ] POD-style or near-POD structs for hot game data
-- [ ] simple field access
-- [ ] update via native systems/functions
-
-Avoid in hot gameplay code:
-- [ ] heavy inheritance
-- [ ] virtual-everything design
-- [ ] exceptions as control flow
-- [ ] overly clever templates
-
-### Need to decide
-- [ ] whether to use STL in limited form
-- [ ] whether to use custom containers for pools
-- [ ] whether to ban dynamic allocation inside update/render entirely
-
----
-
-## 9. QuickJS integration model
-
-### Main principle
-Bind engine-owned objects into JS as handles/wrappers.
-
-### Planned exposed classes
-- [ ] `TileScene2D`
-- [ ] `Entity2D`
-- [ ] `Camera2D`
-
-### Planned exposed modules/namespaces
-- [ ] `Input`
-- [ ] `Screen`
-- [ ] `Math2D` or simple math helpers
-- [ ] possibly `Audio` later
-
-### Binding strategy
-For each wrapped class:
-- [ ] native class/struct exists first
-- [ ] QuickJS wrapper points to native object or stable id
-- [ ] properties proxy to native state
-- [ ] methods call native engine code
-- [ ] finalizers do not destroy engine-owned objects accidentally unless intended
-
-### Need to define callback model
-Potential callbacks:
-- [ ] `scene.onUpdate(dt)`
-- [ ] `entity.onUpdate(dt)`
-- [ ] `entity.onCollide(other)`
-- [ ] `entity.onTileCollision(tx, ty, flags)`
-
-### Avoid in v1
-- [ ] complex inheritance between JS and native engine classes
-- [ ] letting JS subclass native engine classes deeply
-- [ ] JS-controlled lifetime for all entities
-
----
-
-## 10. Proposed JS-facing API
-
-This is intentionally small.
-
-### Example target shape
-```js
-const scene = new TileScene2D(64, 32, 16, 16);
-const camera = new Camera2D();
-scene.setCamera(camera);
-
-const player = scene.createEntity({
-  x: 32,
-  y: 32,
-  w: 16,
-  h: 16,
-  tag: "player"
-});
-
-player.onUpdate = function(dt) {
-  if (Input.down("left")) this.vx = -80;
-  else if (Input.down("right")) this.vx = 80;
-  else this.vx = 0;
-
-  if (Input.pressed("cross") && this.grounded) {
-    this.vy = -220;
-  }
-};
-
-camera.follow(player);
+src/
+  main.cpp                        Entry point
+  engine/                         Engine implementations
+  atlas2d/                        Atlas implementations
+  game/                           Game script implementations
+  platform/                       Platform implementations
 ```
 
-### Desired scene methods
-- [ ] `createEntity(opts)`
-- [ ] `setTile(x, y, tileId)`
-- [ ] `getTile(x, y)`
-- [ ] `setTileFlags(x, y, flags)`
-- [ ] `setCamera(camera)`
-- [ ] `findByTag(tag)`
-
-### Desired entity fields/methods
-- [ ] `x, y, vx, vy`
-- [ ] `w, h`
-- [ ] `grounded`
-- [ ] `tag`
-- [ ] `destroy()`
-- [ ] `onUpdate`
-- [ ] `onCollide`
-
-### Desired camera methods
-- [ ] `follow(entity)`
-- [ ] `setPosition(x, y)`
-- [ ] `setClamp(enabled)`
-
 ---
 
-## 11. Rendering design for v1
+## 9. What's next
 
-### Tile rendering
-Need to decide:
-- [ ] single tile layer first, or support multiple immediately
-- [ ] tile IDs only, or tile + flags + palette info
-- [ ] one tileset or multiple tilesets
+### Immediate
+- [ ] Export a test `.pscn.bin` from peanut-assman and validate rendering
+- [ ] Add camera bounds clamping in `camera_follow` script
+- [ ] Add edge detection (pressed/released) to pad input
 
-Recommended v1:
-- [ ] one visible tile layer
-- [ ] one collision layer
-- [ ] one tileset texture atlas
+### Short-term
+- [ ] Implement AABB collision detection using CollisionShape nodes
+- [ ] Add collision callbacks to script system
+- [ ] Add Area trigger enter/exit callbacks
+- [ ] Test isometric tile projection
 
-### Entity rendering
-Need:
-- [ ] sprite frame index or tile index per entity
-- [ ] flip flags later if needed
-- [ ] camera-relative draw
+### Camera2D + viewport (deferred — needs format + exporter work)
+Goal: engine-owned `Camera2D` driven by a scene node, with a screen viewport so
+the world can render into a sub-region (split-screen / windowed) and a separate
+plane can render outside it. Deferred because it requires a new camera object in
+the PSCN format and exporter support, not just engine code.
 
-### Debug rendering
-Useful before jam:
-- [ ] entity bounds
-- [ ] collision tiles
-- [ ] player position
-- [ ] frame/update timing
-- [ ] current scene info
+- [ ] Add a Camera node type (or reserved Node2D convention) to the PSCN format spec + peanut-assman exporter
+- [ ] `engine::Camera2D` struct: worldX/Y, screen viewport rect (viewX/Y/W/H), zoom
+- [ ] Engine owns the active `Camera2D`; expose via `GameContext` pointer (like `sceneTree`)
+- [ ] Drive camera position from the scene's camera node each frame (after `ComputeWorldTransforms`); fall back to (0,0) if absent; scripts may override
+- [ ] Apply `gsKit_set_scissor(GS_SETREG_SCISSOR(x0,x1,y0,y1))` to clip world rendering to the camera viewport, then `GS_SCISSOR_RESET` for the separate plane
+- [ ] Populate `SceneRenderParams` from `Camera2D` instead of the current `GameContext::cameraX/Y`
+- [ ] Move `camera_follow` out of node scripts into camera-driving logic (it currently registers but never binds — no node carries that scriptId)
 
----
+### Medium-term (QuickJS)
+- [ ] Embed QuickJS runtime
+- [ ] Create JS bridge handler that dispatches scriptId to JS functions
+- [ ] Expose `SceneNode` properties to JS (position, scale, visibility)
+- [ ] Expose `Input` module
+- [ ] Expose `Camera` module
 
-## 12. Asset strategy
-
-### Tiles/maps
-Need to choose:
-- [ ] hardcoded arrays first
-- [ ] simple custom binary/json-like format later
-- [ ] Tiled export support eventually or not
-
-Recommended v1:
-- [ ] simple native-loaded tilemap format
-- [ ] no editor integration until engine works
-
-### Textures
-Need to define:
-- [ ] texture loading path
-- [ ] atlas layout convention
-- [ ] sprite frame lookup strategy
-
-### Audio
-Not needed before engine core is stable.
-
-- [ ] defer audio unless a specific mechanic needs it
-
----
-
-## 13. Milestones
-
-### Milestone 0: toolchain sanity
-- [ ] C sample builds
-- [ ] C++ sample builds
-- [ ] simple ELF runs
-- [ ] debug output works
-
-### Milestone 1: native-only engine core
-- [ ] engine loop
-- [ ] input polling
-- [ ] one scene
-- [ ] one camera
-- [ ] tile collision
-- [ ] one moving entity
-- [ ] one renderable tilemap
-
-### Milestone 2: native scene architecture
-- [ ] entity pool
-- [ ] scene update order finalized
-- [ ] camera follow works
-- [ ] scene render order works
-
-### Milestone 3: QuickJS bring-up
-- [ ] runtime/context init
-- [ ] one native function exposed
-- [ ] one native class exposed
-- [ ] script file load/execute works
-
-### Milestone 4: scriptable gameplay objects
-- [ ] `TileScene2D` wrapper
-- [ ] `Entity2D` wrapper
-- [ ] `Camera2D` wrapper
-- [ ] `entity.onUpdate(dt)` callback works
-
-### Milestone 5: playable vertical slice
-- [ ] player movement
-- [ ] tilemap collision
-- [ ] camera follow
-- [ ] one enemy or hazard
-- [ ] restart loop
-- [ ] one short level
-
----
-
-## 14. Risks
-
-### Architectural risks
-- [ ] overbuilding script integration too early
-- [ ] making entities too OO-heavy
-- [ ] duplicating native and JS state
-- [ ] designing for flexibility instead of finishing
-
-### Technical risks
-- [ ] asset pipeline delays
-- [ ] renderer quirks on real hardware
-- [ ] performance death by allocations
-- [ ] callback/lifetime bugs across QuickJS boundary
-
-### Scope risks
-- [ ] trying to support too many gameplay patterns
-- [ ] building an engine instead of a jam game
-
----
-
-## 15. Immediate decisions to make
-
-- [ ] fixed timestep = 1/60?
-- [ ] entity pool size?
-- [ ] tile size = 16x16 or 32x32?
-- [ ] room-based or scrolling world?
-- [ ] one layer or multiple tile layers in v1?
-- [ ] script callbacks only, or also scene script modules?
-- [ ] raw pointers or stable IDs in JS wrappers? recommended: stable IDs
-- [ ] use stock QuickJS first, no engine patches? recommended: yes
-
----
-
-## 16. Recommended v1 architecture summary
-
-### Native side
-- [ ] `Engine`
-- [ ] `Renderer2D`
-- [ ] `TileScene2D`
-- [ ] `Camera2D`
-- [ ] `EntityPool`
-- [ ] `InputState`
-- [ ] `ScriptVM`
-
-### Script side
-- [ ] scene setup script
-- [ ] entity behavior callbacks
-- [ ] game rule scripts
-
-### Main rules
-- [ ] native owns data
-- [ ] script owns behavior
-- [ ] fixed timestep
-- [ ] no VU dependency
-- [ ] no fancy physics
-- [ ] no deep inheritance model
-
----
-
-## 17. First implementation checklist
-
-### Week 1 / prep phase
-- [ ] create native engine skeleton
-- [ ] implement fixed loop
-- [ ] get tilemap drawing working
-- [ ] get one entity moving with collision
-- [ ] get camera follow working
-
-### Week 2 / scripting phase
-- [ ] embed QuickJS
-- [ ] expose `Input`
-- [ ] expose `Entity2D`
-- [ ] expose `TileScene2D`
-- [ ] run `onUpdate(dt)` from script
-
-### Jam-ready baseline
-- [ ] start game
-- [ ] load level
-- [ ] move player
-- [ ] collide with walls
-- [ ] restart after death
-- [ ] script one enemy or hazard
-
----
-
-## 18. Open questions
-
-- [ ] Should scene rendering be fully native or partially script-driven?
-- [ ] Should `Entity2D` support animation in v1 or only sprite frame indices?
-- [ ] Should scene callbacks run before or after native movement by default?
-- [ ] Should collision callbacks be immediate or deferred until after scene update?
-- [ ] Should map data be script-created first or loaded from native files first?
-- [ ] Should `Camera2D` be one active singleton per scene in v1?
-
----
-
-## 19. Final recommendation
-
-Build the smallest architecture that can support one real game.
-
-That means:
-- [ ] one scene type
-- [ ] one entity type
-- [ ] one camera type
-- [ ] one collision model
-- [ ] one renderer path
-- [ ] one scripting model
-
-Do not design for future engine elegance until the first playable room exists.
-
+### Polish
+- [ ] Debug overlay rendering (entity bounds, collision shapes, frame timing)
+- [ ] Light2D rendering (GS alpha blending)
+- [ ] Audio support

@@ -1,0 +1,16 @@
+CompileFlags:
+  # compile_commands.json lives in the project root.
+  CompilationDatabase: .
+  # Strip MIPS/PS2-only flags that clangd's parser doesn't understand.
+  Remove:
+    - -G0
+    - -G*
+    - -gz
+    - -mgpopt
+    - -march=*
+    - -mtune=*
+
+Diagnostics:
+  # Suppress false-positive cross-compile diagnostics in editor.
+  Suppress:
+    - unknown_argument

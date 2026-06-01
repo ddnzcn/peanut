@@ -151,34 +151,30 @@ uint32_t AtlasPack::ResolveAnimFrame(uint32_t nameHash, uint32_t timeMs) const
     return UINT32_MAX;
   }
 
-  // Compute total duration
   uint32_t totalMs = 0;
   for (uint16_t i = 0; i < anim->frameCount; ++i)
   {
-    totalMs += m_frames[anim->firstFrame + i].durationMs;
+    totalMs += m_frames[anim->firstFrameIndex + i].durationMs;
   }
 
   if (totalMs == 0)
   {
-    return m_frames[anim->firstFrame].spriteIndex;
+    return m_frames[anim->firstFrameIndex].spriteIndex;
   }
 
-  // Wrap time if looping
   if (anim->flags & AtlasAnimFlag_Loop)
   {
     timeMs = timeMs % totalMs;
   }
   else if (timeMs >= totalMs)
   {
-    // Clamp to last frame when not looping
-    return m_frames[anim->firstFrame + anim->frameCount - 1].spriteIndex;
+    return m_frames[anim->firstFrameIndex + anim->frameCount - 1].spriteIndex;
   }
 
-  // Walk frames to find the current one
   uint32_t cursor = 0;
   for (uint16_t i = 0; i < anim->frameCount; ++i)
   {
-    const AtlasFrame &frame = m_frames[anim->firstFrame + i];
+    const AtlasFrame &frame = m_frames[anim->firstFrameIndex + i];
     cursor += frame.durationMs;
     if (timeMs < cursor)
     {
@@ -186,7 +182,7 @@ uint32_t AtlasPack::ResolveAnimFrame(uint32_t nameHash, uint32_t timeMs) const
     }
   }
 
-  return m_frames[anim->firstFrame + anim->frameCount - 1].spriteIndex;
+  return m_frames[anim->firstFrameIndex + anim->frameCount - 1].spriteIndex;
 }
 
 uint16_t AtlasPack::GetAnimTileCount() const
@@ -211,7 +207,6 @@ uint32_t AtlasPack::ResolveAnimTileFrame(uint32_t baseSpriteIndex, uint32_t time
     return baseSpriteIndex;
   }
 
-  // Linear search for the animated tile matching this base sprite
   for (uint16_t i = 0; i < m_header->animTileCount; ++i)
   {
     const AtlasAnimTile &animTile = m_animTiles[i];
@@ -220,25 +215,23 @@ uint32_t AtlasPack::ResolveAnimTileFrame(uint32_t baseSpriteIndex, uint32_t time
       continue;
     }
 
-    // Compute total duration
     uint32_t totalMs = 0;
     for (uint16_t f = 0; f < animTile.frameCount; ++f)
     {
-      totalMs += m_animTileFrames[animTile.firstFrame + f].durationMs;
+      totalMs += m_animTileFrames[animTile.firstFrameIndex + f].durationMs;
     }
 
     if (totalMs == 0)
     {
-      return m_animTileFrames[animTile.firstFrame].spriteIndex;
+      return m_animTileFrames[animTile.firstFrameIndex].spriteIndex;
     }
 
-    // Animated tiles always loop
     const uint32_t wrappedMs = timeMs % totalMs;
 
     uint32_t cursor = 0;
     for (uint16_t f = 0; f < animTile.frameCount; ++f)
     {
-      const AtlasAnimTileFrame &frame = m_animTileFrames[animTile.firstFrame + f];
+      const AtlasAnimTileFrame &frame = m_animTileFrames[animTile.firstFrameIndex + f];
       cursor += frame.durationMs;
       if (wrappedMs < cursor)
       {
@@ -246,7 +239,7 @@ uint32_t AtlasPack::ResolveAnimTileFrame(uint32_t baseSpriteIndex, uint32_t time
       }
     }
 
-    return m_animTileFrames[animTile.firstFrame + animTile.frameCount - 1].spriteIndex;
+    return m_animTileFrames[animTile.firstFrameIndex + animTile.frameCount - 1].spriteIndex;
   }
 
   return baseSpriteIndex;
@@ -287,31 +280,24 @@ const AtlasSprite *AtlasPack::FindSpriteByHash(uint32_t hash) const
     return nullptr;
   }
 
-  uint32_t left = 0;
-  uint32_t right = m_hashCount;
+  const uint32_t mask = m_hashCount - 1;
+  uint32_t slot = hash & mask;
 
-  while (left < right)
+  for (uint32_t probe = 0; probe < m_hashCount; ++probe)
   {
-    const uint32_t mid = left + (right - left) / 2;
-    const AtlasHashEntry &entry = m_hashes[mid];
+    const AtlasHashEntry &entry = m_hashes[slot];
 
-    if (entry.nameHash == hash)
+    if (entry.nameHash == 0)
     {
-      if (entry.spriteIndex < m_header->spriteCount)
-      {
-        return &m_sprites[entry.spriteIndex];
-      }
       return nullptr;
     }
 
-    if (hash < entry.nameHash)
+    if (entry.nameHash == hash && entry.spriteIndex < m_header->spriteCount)
     {
-      right = mid;
+      return &m_sprites[entry.spriteIndex];
     }
-    else
-    {
-      left = mid + 1;
-    }
+
+    slot = (slot + 1) & mask;
   }
 
   return nullptr;
@@ -337,12 +323,10 @@ AtlasImageView AtlasPack::GetPageImage(uint32_t pageIndex) const
   view.sizeBytes = page.dataSize;
   view.width = page.width;
   view.height = page.height;
-  view.format = static_cast<PageFormat>(page.format);
+  view.format = PageFormat::RGBA32;
   return view;
 }
 
-// Returns normalized [0,1] UVs. Note: gsKit expects pixel-space texcoords,
-// so use BuildAtlasQuad (in AtlasPackUtils) for rendering, not this.
 SpriteUVRect AtlasPack::ComputeUVs(const AtlasSprite &sprite) const
 {
   SpriteUVRect uv = {};
@@ -463,18 +447,6 @@ bool AtlasPack::ResolveTables()
   const uint32_t spritesSize =
       static_cast<uint32_t>(m_header->spriteCount) * sizeof(AtlasSprite);
 
-  if (m_header->pageTableOffset % 4 != 0)
-  {
-    m_lastError = "Page table offset not 4-byte aligned";
-    return false;
-  }
-
-  if (m_header->spriteTableOffset % 4 != 0)
-  {
-    m_lastError = "Sprite table offset not 4-byte aligned";
-    return false;
-  }
-
   if (AddOverflowsRange(m_header->pageTableOffset, pagesSize, metaSize))
   {
     m_lastError = "Page table out of range";
@@ -497,12 +469,6 @@ bool AtlasPack::ResolveTables()
     const uint32_t animsSize =
         static_cast<uint32_t>(m_header->animCount) * sizeof(AtlasAnim);
 
-    if (m_header->animTableOffset % 4 != 0)
-    {
-      m_lastError = "Anim table offset not 4-byte aligned";
-      return false;
-    }
-
     if (AddOverflowsRange(m_header->animTableOffset, animsSize, metaSize))
     {
       m_lastError = "Anim table out of range";
@@ -512,12 +478,19 @@ bool AtlasPack::ResolveTables()
     m_anims = reinterpret_cast<const AtlasAnim *>(
         m_metaBytes.data() + m_header->animTableOffset);
 
-    if (m_header->frameTableOffset != 0 &&
-        m_header->frameTableOffset >= m_header->animTableOffset &&
-        m_header->frameTableOffset < metaSize)
+    if (m_header->animFrameCount > 0 && m_header->animFrameTableOffset != 0)
     {
+      const uint32_t framesSize =
+          static_cast<uint32_t>(m_header->animFrameCount) * sizeof(AtlasFrame);
+
+      if (AddOverflowsRange(m_header->animFrameTableOffset, framesSize, metaSize))
+      {
+        m_lastError = "Anim frame table out of range";
+        return false;
+      }
+
       m_frames = reinterpret_cast<const AtlasFrame *>(
-          m_metaBytes.data() + m_header->frameTableOffset);
+          m_metaBytes.data() + m_header->animFrameTableOffset);
     }
   }
 
@@ -525,12 +498,6 @@ bool AtlasPack::ResolveTables()
   {
     const uint32_t animTilesSize =
         static_cast<uint32_t>(m_header->animTileCount) * sizeof(AtlasAnimTile);
-
-    if (m_header->animTileTableOffset % 4 != 0)
-    {
-      m_lastError = "Anim tile table offset not 4-byte aligned";
-      return false;
-    }
 
     if (AddOverflowsRange(m_header->animTileTableOffset, animTilesSize, metaSize))
     {
@@ -541,31 +508,37 @@ bool AtlasPack::ResolveTables()
     m_animTiles = reinterpret_cast<const AtlasAnimTile *>(
         m_metaBytes.data() + m_header->animTileTableOffset);
 
-    if (m_header->animTileFrameTableOffset != 0 &&
-        m_header->animTileFrameTableOffset > m_header->animTileTableOffset &&
-        m_header->animTileFrameTableOffset < metaSize)
+    // Anim tile frames follow immediately after anim tiles
+    if (m_header->animTileFrameCount > 0)
     {
+      const uint32_t animTileFramesOffset =
+          m_header->animTileTableOffset + animTilesSize;
+      const uint32_t animTileFramesSize =
+          static_cast<uint32_t>(m_header->animTileFrameCount) * sizeof(AtlasAnimTileFrame);
+
+      if (AddOverflowsRange(animTileFramesOffset, animTileFramesSize, metaSize))
+      {
+        m_lastError = "Anim tile frame table out of range";
+        return false;
+      }
+
       m_animTileFrames = reinterpret_cast<const AtlasAnimTileFrame *>(
-          m_metaBytes.data() + m_header->animTileFrameTableOffset);
+          m_metaBytes.data() + animTileFramesOffset);
     }
   }
 
-  if (m_header->hashTableOffset != 0)
+  if (m_header->hashEntryCount > 0 && m_header->hashTableOffset != 0)
   {
-    if (m_header->hashTableOffset % 4 != 0)
+    const uint32_t hashSize =
+        static_cast<uint32_t>(m_header->hashEntryCount) * sizeof(AtlasHashEntry);
+
+    if (AddOverflowsRange(m_header->hashTableOffset, hashSize, metaSize))
     {
-      m_lastError = "Hash table offset not 4-byte aligned";
+      m_lastError = "Hash table out of range";
       return false;
     }
 
-    if (m_header->hashTableOffset >= metaSize)
-    {
-      m_lastError = "Hash table offset out of range";
-      return false;
-    }
-
-    const uint32_t remaining = metaSize - m_header->hashTableOffset;
-    m_hashCount = remaining / sizeof(AtlasHashEntry);
+    m_hashCount = m_header->hashEntryCount;
     m_hashes = reinterpret_cast<const AtlasHashEntry *>(
         m_metaBytes.data() + m_header->hashTableOffset);
   }
@@ -599,25 +572,12 @@ bool AtlasPack::ValidatePages()
       return false;
     }
 
-    switch (static_cast<PageFormat>(page.format))
+    const uint32_t expected =
+        static_cast<uint32_t>(page.width) *
+        static_cast<uint32_t>(page.height) * 4u;
+    if (page.dataSize < expected)
     {
-    case PageFormat::RGBA32:
-    {
-      const uint32_t expected =
-          static_cast<uint32_t>(page.width) *
-          static_cast<uint32_t>(page.height) * 4u;
-      if (page.dataSize < expected)
-      {
-        m_lastError = "RGBA32 page data smaller than expected";
-        return false;
-      }
-      break;
-    }
-    case PageFormat::IDX8:
-    case PageFormat::IDX4:
-      break;
-    default:
-      m_lastError = "Unsupported page format";
+      m_lastError = "Page data smaller than expected RGBA32 size";
       return false;
     }
   }
@@ -633,10 +593,8 @@ bool AtlasPack::ValidatePages()
     }
 
     const AtlasPage &page = m_pages[sprite.pageIndex];
-    const uint32_t x1 = static_cast<uint32_t>(sprite.x);
-    const uint32_t y1 = static_cast<uint32_t>(sprite.y);
-    const uint32_t x2 = x1 + static_cast<uint32_t>(sprite.w);
-    const uint32_t y2 = y1 + static_cast<uint32_t>(sprite.h);
+    const uint32_t x2 = static_cast<uint32_t>(sprite.x) + static_cast<uint32_t>(sprite.w);
+    const uint32_t y2 = static_cast<uint32_t>(sprite.y) + static_cast<uint32_t>(sprite.h);
 
     if (x2 > page.width || y2 > page.height)
     {
@@ -655,27 +613,25 @@ bool AtlasPack::ValidateHashTable()
     return true;
   }
 
+  // Open addressing table: size must be power of 2
+  if ((m_hashCount & (m_hashCount - 1)) != 0)
+  {
+    m_lastError = "Hash table size not power of 2";
+    return false;
+  }
+
   for (uint32_t i = 0; i < m_hashCount; ++i)
   {
-    if (m_hashes[i].spriteIndex >= m_header->spriteCount)
+    const AtlasHashEntry &entry = m_hashes[i];
+    if (entry.nameHash == 0)
+    {
+      continue;
+    }
+
+    if (entry.spriteIndex >= m_header->spriteCount)
     {
       m_lastError = "Hash table sprite index out of range";
       return false;
-    }
-
-    if (i > 0)
-    {
-      if (m_hashes[i - 1].nameHash > m_hashes[i].nameHash)
-      {
-        m_lastError = "Hash table not sorted";
-        return false;
-      }
-
-      if (m_hashes[i - 1].nameHash == m_hashes[i].nameHash)
-      {
-        m_lastError = "Duplicate name hash in hash table";
-        return false;
-      }
     }
   }
 

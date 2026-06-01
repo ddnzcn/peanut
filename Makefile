@@ -1,9 +1,9 @@
 BUILD_MODE ?= elf
 HOST ?= host
 ASSET_DEVICE ?= host
-ASSET_ROOT ?=
+ASSET_ROOT ?= assets/
 
-EE_BIN = ps2jam.elf
+EE_BIN = peanut.elf
 
 EE_INCS += -I$(CURDIR)/include
 EE_INCS += -I$(GSKIT)/include
@@ -16,10 +16,15 @@ EE_OBJS = \
 	src/main.o \
 	src/atlas2d/AtlasPack.o \
 	src/atlas2d/AtlasPackUtils.o \
-	src/level2d/TilemapRuntime.o \
-	src/level2d/TilemapRenderer.o \
 	src/platform/asset_path.o \
-	src/engine/engine.o
+	src/engine/engine.o \
+	src/engine/scene/PscnLoader.o \
+	src/engine/scene/SceneTree.o \
+	src/engine/scene/BehaviorRegistry.o \
+	src/engine/scene/SignalBus.o \
+	src/engine/scene/SceneRenderer.o \
+	src/game/Game.o \
+	src/game/Behaviors.o
 
 EE_LIBS += -lgskit -ldmakit -lpad -lc -lstdc++
 
