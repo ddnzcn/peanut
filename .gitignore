@@ -17,3 +17,6 @@
 # macOS / editor noise
 .DS_Store
 .vscode/
+
+# Per-developer clangd database (regenerate with tools/gen_compile_commands.py)
+compile_commands.json

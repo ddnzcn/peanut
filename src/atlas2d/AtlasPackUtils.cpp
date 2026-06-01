@@ -12,9 +12,9 @@ void BuildAtlasQuad(const AtlasSprite &sprite,
                     SpriteVertex out[4])
 {
     const float x0 =
-        anchorX + (static_cast<float>(sprite.trimX) - static_cast<float>(sprite.pivotX)) * scale;
+        anchorX + static_cast<float>(sprite.trimX) * scale;
     const float y0 =
-        anchorY + (static_cast<float>(sprite.trimY) - static_cast<float>(sprite.pivotY)) * scale;
+        anchorY + static_cast<float>(sprite.trimY) * scale;
     const float x1 = x0 + static_cast<float>(sprite.w) * scale;
     const float y1 = y0 + static_cast<float>(sprite.h) * scale;
 
