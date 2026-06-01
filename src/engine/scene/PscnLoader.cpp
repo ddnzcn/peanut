@@ -545,6 +545,89 @@ bool PscnFile::ValidateRanges()
         return false;
       }
       break;
+    case NODE_CAMERA2D:
+      if (base->extSize != sizeof(PscnCamera2DExt))
+      {
+        m_lastError = "Camera2D extSize mismatch";
+        return false;
+      }
+      break;
+    case NODE_SPAWNER:
+      if (base->extSize != sizeof(PscnSpawnerExt))
+      {
+        m_lastError = "Spawner extSize mismatch";
+        return false;
+      }
+      break;
+    case NODE_PATH2D:
+    {
+      if (base->extSize < sizeof(PscnPath2DExt))
+      {
+        m_lastError = "Path2D extSize too small";
+        return false;
+      }
+      const PscnPath2DExt *pathExt = reinterpret_cast<const PscnPath2DExt *>(
+          reinterpret_cast<const uint8_t *>(base) + sizeof(PscnNodeBase));
+      const uint16_t expected = static_cast<uint16_t>(
+          sizeof(PscnPath2DExt) + static_cast<size_t>(pathExt->pointCount) * 8u);
+      if (base->extSize != expected)
+      {
+        m_lastError = "Path2D extSize does not match pointCount";
+        return false;
+      }
+      break;
+    }
+    case NODE_PATH_FOLLOW2D:
+      if (base->extSize != sizeof(PscnPathFollow2DExt))
+      {
+        m_lastError = "PathFollow2D extSize mismatch";
+        return false;
+      }
+      break;
+    case NODE_TIMER:
+      if (base->extSize != sizeof(PscnTimerExt))
+      {
+        m_lastError = "Timer extSize mismatch";
+        return false;
+      }
+      break;
+    case NODE_DECAL:
+      if (base->extSize != sizeof(PscnDecalExt))
+      {
+        m_lastError = "Decal extSize mismatch";
+        return false;
+      }
+      break;
+    case NODE_VISIBILITY_NOTIFIER:
+      if (base->extSize != sizeof(PscnVisibilityNotifierExt))
+      {
+        m_lastError = "VisibilityNotifier extSize mismatch";
+        return false;
+      }
+      break;
+    case NODE_NAV_REGION2D:
+    {
+      if (base->extSize < sizeof(PscnNavRegion2DExt))
+      {
+        m_lastError = "NavRegion2D extSize too small";
+        return false;
+      }
+      const PscnNavRegion2DExt *navExt = reinterpret_cast<const PscnNavRegion2DExt *>(
+          reinterpret_cast<const uint8_t *>(base) + sizeof(PscnNodeBase));
+      if (navExt->pointCount < 3)
+      {
+        m_lastError = "NavRegion2D pointCount must be >= 3";
+        return false;
+      }
+      const uint16_t expected = static_cast<uint16_t>(
+          sizeof(PscnNavRegion2DExt) + static_cast<size_t>(navExt->pointCount) * 8u);
+      if (base->extSize != expected)
+      {
+        m_lastError = "NavRegion2D extSize does not match pointCount";
+        return false;
+      }
+      break;
+    }
     default:
       m_lastError = "Unknown node type";
       return false;

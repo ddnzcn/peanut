@@ -21,6 +21,14 @@ enum PscnNodeType : uint8_t
   NODE_AREA = 5,
   NODE_LIGHT2D = 6,
   NODE_ANIMATED_SPRITE = 7,
+  NODE_CAMERA2D = 8,
+  NODE_SPAWNER = 9,
+  NODE_PATH2D = 10,
+  NODE_PATH_FOLLOW2D = 11,
+  NODE_TIMER = 12,
+  NODE_DECAL = 13,
+  NODE_VISIBILITY_NOTIFIER = 14,
+  NODE_NAV_REGION2D = 15,
 };
 
 enum PscnNodeFlags : uint8_t
@@ -60,6 +68,48 @@ enum PscnLightVariant : uint8_t
 {
   LIGHT_OMNI = 0,
   LIGHT_DIRECTIONAL = 1,
+};
+
+enum PscnCamera2DFlags : uint16_t
+{
+  CAMERA_FLAG_IS_CURRENT = 1 << 0,
+  CAMERA_FLAG_USE_BOUNDS = 1 << 1,
+};
+
+enum PscnSpawnerFlags : uint16_t
+{
+  SPAWNER_FLAG_AUTO_START = 1 << 0,
+};
+
+enum PscnPath2DFlags : uint16_t
+{
+  PATH2D_FLAG_CLOSED = 1 << 0,
+};
+
+enum PscnPathFollow2DFlags : uint16_t
+{
+  PATH_FOLLOW_FLAG_LOOP = 1 << 0,
+  PATH_FOLLOW_FLAG_ROTATE_TO_PATH = 1 << 1,
+  PATH_FOLLOW_FLAG_CUBIC_INTERP = 1 << 2,
+};
+
+enum PscnTimerFlags : uint16_t
+{
+  TIMER_FLAG_ONE_SHOT = 1 << 0,
+  TIMER_FLAG_AUTO_START = 1 << 1,
+};
+
+enum PscnDecalBlend : uint8_t
+{
+  DECAL_ALPHA = 0,
+  DECAL_ADDITIVE = 1,
+  DECAL_MULTIPLY = 2,
+};
+
+enum PscnDecalFlipFlags : uint8_t
+{
+  DECAL_FLIP_H = 1 << 0,
+  DECAL_FLIP_V = 1 << 1,
 };
 
 #pragma pack(push, 1)
@@ -175,6 +225,84 @@ struct PscnLight2DExt
   int16_t _reserved;
 };
 
+struct PscnCamera2DExt
+{
+  int16_t zoom;            // 8.8 fixed (256 = 1.0)
+  int16_t smoothingSpeed;  // 8.8 fixed (0 = snap)
+  uint16_t flags;          // PscnCamera2DFlags
+  uint16_t _pad;
+  uint32_t followTargetHash; // FNV-1a; 0 = none
+  int16_t boundsLeft;
+  int16_t boundsTop;
+  int16_t boundsRight;
+  int16_t boundsBottom;
+  uint32_t _reserved;
+};
+
+struct PscnSpawnerExt
+{
+  uint32_t sceneNameHash;
+  uint16_t spawnIntervalMs;  // 0 = manual
+  uint16_t maxAlive;          // 0 = unlimited
+  uint16_t flags;             // PscnSpawnerFlags
+  uint16_t _pad;
+  uint32_t spawnAreaRadius;   // 16.16 fixed
+};
+
+// Variable-size: 8-byte base + pointCount * { i32 x, i32 y } (16.16 fixed).
+struct PscnPath2DExt
+{
+  uint16_t pointCount;
+  uint16_t flags;             // PscnPath2DFlags
+  uint32_t color;             // RGBA preview
+  // followed by pointCount * 8 bytes (int32 x, int32 y)
+};
+
+struct PscnPathFollow2DExt
+{
+  uint32_t pathNodeHash;   // FNV-1a of Path2D node name
+  int16_t progress;        // 8.8 fixed (0..1)
+  uint16_t flags;          // PscnPathFollow2DFlags
+  uint32_t loopOffsetMs;
+};
+
+struct PscnTimerExt
+{
+  uint32_t waitTimeMs;
+  uint16_t flags;          // PscnTimerFlags
+  uint16_t _pad;
+  uint32_t eventNameHash;  // FNV-1a
+};
+
+struct PscnDecalExt
+{
+  uint32_t spriteId;
+  uint8_t blendMode;       // PscnDecalBlend
+  int8_t sortOffset;
+  uint8_t flipFlags;       // PscnDecalFlipFlags
+  uint8_t _pad;
+  uint32_t tintColor;
+  uint32_t _reserved;
+};
+
+struct PscnVisibilityNotifierExt
+{
+  int32_t width;           // 16.16 fixed
+  int32_t height;          // 16.16 fixed
+  uint32_t enterEventHash;
+  uint32_t exitEventHash;
+};
+
+// Variable-size: 8-byte base + pointCount * { i32 x, i32 y } (16.16 fixed).
+// Polygon is always closed (last→first segment implied).
+struct PscnNavRegion2DExt
+{
+  uint16_t pointCount;    // minimum 3
+  uint16_t navLayer;      // bitmask
+  uint32_t _reserved;
+  // followed by pointCount * 8 bytes (int32 x, int32 y)
+};
+
 struct PscnTilesetDef
 {
   uint32_t id;
@@ -225,6 +353,14 @@ static_assert(sizeof(PscnTileMapExt) == 24, "PscnTileMapExt size mismatch");
 static_assert(sizeof(PscnCollisionShapeExt) == 16, "PscnCollisionShapeExt size mismatch");
 static_assert(sizeof(PscnAreaExt) == 16, "PscnAreaExt size mismatch");
 static_assert(sizeof(PscnLight2DExt) == 20, "PscnLight2DExt size mismatch");
+static_assert(sizeof(PscnCamera2DExt) == 24, "PscnCamera2DExt size mismatch");
+static_assert(sizeof(PscnSpawnerExt) == 16, "PscnSpawnerExt size mismatch");
+static_assert(sizeof(PscnPath2DExt) == 8, "PscnPath2DExt base size mismatch");
+static_assert(sizeof(PscnPathFollow2DExt) == 12, "PscnPathFollow2DExt size mismatch");
+static_assert(sizeof(PscnTimerExt) == 12, "PscnTimerExt size mismatch");
+static_assert(sizeof(PscnDecalExt) == 16, "PscnDecalExt size mismatch");
+static_assert(sizeof(PscnVisibilityNotifierExt) == 16, "PscnVisibilityNotifierExt size mismatch");
+static_assert(sizeof(PscnNavRegion2DExt) == 8, "PscnNavRegion2DExt base size mismatch");
 static_assert(sizeof(PscnTilesetDef) == 28, "PscnTilesetDef size mismatch");
 static_assert(sizeof(PscnChunkDef) == 20, "PscnChunkDef size mismatch");
 static_assert(sizeof(PscnTileCell) == 8, "PscnTileCell size mismatch");
